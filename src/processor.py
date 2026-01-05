@@ -1,11 +1,14 @@
 """Main order processing pipeline."""
 
 from __future__ import annotations
-from typing import Optional
-from .models import ProcessingResult
+from typing import Optional, TYPE_CHECKING
+from .models import ProcessingResult, OdooSubmissionResult
 from .extractor import OrderExtractor
 from .confirmation import ConfirmationGenerator
 from .erp_payload import build_erp_payload
+
+if TYPE_CHECKING:
+    from .odoo_client import OdooClient
 
 
 class OrderProcessor:
@@ -13,28 +16,37 @@ class OrderProcessor:
     Main processor for WhatsApp order messages.
 
     Orchestrates extraction, ERP payload generation, and confirmation.
+    Optionally submits orders to Odoo ERP.
     """
 
-    def __init__(self, api_key: Optional[str] = None):
+    def __init__(self, api_key: Optional[str] = None, odoo_client: Optional["OdooClient"] = None):
         """
         Initialize the processor.
 
         Args:
             api_key: Anthropic API key (uses ANTHROPIC_API_KEY env var if not provided)
+            odoo_client: Optional Odoo client for ERP submission
         """
         self.extractor = OrderExtractor(api_key)
         self.confirmation_generator = ConfirmationGenerator(api_key)
+        self.odoo_client = odoo_client
 
-    def process(self, message: str, use_simple_confirmation: bool = False) -> ProcessingResult:
+    def process(
+        self,
+        message: str,
+        use_simple_confirmation: bool = False,
+        submit_to_odoo: bool = False,
+    ) -> ProcessingResult:
         """
         Process a WhatsApp order message end-to-end.
 
         Args:
             message: Raw WhatsApp message text
             use_simple_confirmation: Use template-based confirmation (no LLM call)
+            submit_to_odoo: Whether to submit the order to Odoo ERP
 
         Returns:
-            ProcessingResult with extraction, ERP payload, and confirmation
+            ProcessingResult with extraction, ERP payload, confirmation, and optional Odoo result
         """
         try:
             # Step 1: Extract order data from message
@@ -49,11 +61,24 @@ class OrderProcessor:
             else:
                 confirmation = self.confirmation_generator.generate(extracted_order)
 
+            # Step 4: Optionally submit to Odoo
+            odoo_result = None
+            if submit_to_odoo and self.odoo_client:
+                odoo_response = self.odoo_client.submit_order(erp_payload)
+                odoo_result = OdooSubmissionResult(
+                    success=odoo_response.success,
+                    order_id=odoo_response.order_id,
+                    order_name=odoo_response.order_name,
+                    error=odoo_response.error,
+                    unmatched_products=odoo_response.unmatched_products or [],
+                )
+
             return ProcessingResult(
                 success=True,
                 extracted_order=extracted_order,
                 erp_payload=erp_payload,
                 confirmation_message=confirmation,
+                odoo_result=odoo_result,
             )
 
         except Exception as e:

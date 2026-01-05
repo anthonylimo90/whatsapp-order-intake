@@ -6,12 +6,14 @@ Usage:
     python3 main.py                    # Run interactive demo
     python3 main.py --message "..."    # Process a single message
     python3 main.py --test             # Run all sample messages
+    python3 main.py --test --odoo      # Run with mock Odoo integration
 """
 
 import argparse
 import json
 from dotenv import load_dotenv
 from src.processor import OrderProcessor
+from src.odoo_client import MockOdooClient
 
 # Load environment variables from .env file
 load_dotenv()
@@ -90,6 +92,17 @@ def print_result(result, show_json=True):
         print_divider("-")
         print(json.dumps(erp.model_dump(), indent=2))
 
+    # Show Odoo result if present
+    if result.odoo_result:
+        print("\n🏢 ODOO SUBMISSION")
+        print_divider("-")
+        if result.odoo_result.success:
+            print(f"  ✅ Order created: {result.odoo_result.order_name} (ID: {result.odoo_result.order_id})")
+        else:
+            print(f"  ❌ Failed: {result.odoo_result.error}")
+        if result.odoo_result.unmatched_products:
+            print(f"  ⚠️  Unmatched products: {', '.join(result.odoo_result.unmatched_products)}")
+
     print("\n💬 CONFIRMATION MESSAGE")
     print_divider("-")
     print(result.confirmation_message)
@@ -146,7 +159,7 @@ def run_interactive():
             print("Invalid choice, please try again.")
 
 
-def process_sample(processor, sample_key):
+def process_sample(processor, sample_key, submit_to_odoo=False):
     """Process a specific sample message."""
     sample = SAMPLE_MESSAGES[sample_key]
     print(f"\n{'=' * 60}")
@@ -154,14 +167,14 @@ def process_sample(processor, sample_key):
     print("=" * 60)
     print(f"\n📱 INPUT MESSAGE:\n{sample['message']}")
     print("\nProcessing...")
-    result = processor.process(sample["message"])
+    result = processor.process(sample["message"], submit_to_odoo=submit_to_odoo)
     print_result(result)
 
 
-def run_all_samples(processor):
+def run_all_samples(processor, submit_to_odoo=False):
     """Run all sample messages."""
     for key in SAMPLE_MESSAGES:
-        process_sample(processor, key)
+        process_sample(processor, key, submit_to_odoo=submit_to_odoo)
         print("\n" + "=" * 60 + "\n")
 
 
@@ -178,25 +191,38 @@ def main():
     parser.add_argument(
         "--json", "-j", action="store_true", help="Output JSON only"
     )
+    parser.add_argument(
+        "--odoo", "-o", action="store_true", help="Submit to Odoo (uses mock client for demo)"
+    )
 
     args = parser.parse_args()
 
-    processor = OrderProcessor()
+    # Initialize Odoo client if requested
+    odoo_client = None
+    if args.odoo:
+        odoo_client = MockOdooClient()
+        odoo_client.connect()
+        print("🏢 Odoo integration enabled (using mock client)")
+
+    processor = OrderProcessor(odoo_client=odoo_client)
 
     if args.message:
-        result = processor.process(args.message)
+        result = processor.process(args.message, submit_to_odoo=args.odoo)
         if args.json:
-            print(json.dumps({
+            output = {
                 "extracted_order": result.extracted_order.model_dump() if result.extracted_order else None,
                 "erp_payload": result.erp_payload.model_dump() if result.erp_payload else None,
                 "confirmation_message": result.confirmation_message,
                 "success": result.success,
                 "error": result.error,
-            }, indent=2))
+            }
+            if result.odoo_result:
+                output["odoo_result"] = result.odoo_result.model_dump()
+            print(json.dumps(output, indent=2))
         else:
             print_result(result)
     elif args.test:
-        run_all_samples(processor)
+        run_all_samples(processor, submit_to_odoo=args.odoo)
     else:
         run_interactive()
 

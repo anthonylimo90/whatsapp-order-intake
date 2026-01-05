@@ -215,6 +215,121 @@
 
 ---
 
+## 6. Odoo Integration Details
+
+### API Overview
+
+Odoo provides an External API via XML-RPC (and JSON-RPC) for programmatic access:
+
+| Endpoint | Purpose |
+|----------|---------|
+| `/xmlrpc/2/common` | Authentication |
+| `/xmlrpc/2/object` | Model operations (CRUD) |
+
+**Important Notes:**
+- External API only available on **Custom pricing plans** (not Free/Standard)
+- XML-RPC/JSON-RPC APIs are **deprecated** and will be removed in Odoo 20 (Fall 2026)
+- Consider migrating to newer REST API when available
+
+### Authentication
+
+```python
+import xmlrpc.client
+
+url = "https://your-odoo-instance.com"
+db = "database-name"
+username = "user@example.com"
+password = "password-or-api-key"  # API keys supported in Odoo 14+
+
+common = xmlrpc.client.ServerProxy(f"{url}/xmlrpc/2/common")
+uid = common.authenticate(db, username, password, {})
+models = xmlrpc.client.ServerProxy(f"{url}/xmlrpc/2/object")
+```
+
+### Key Operations
+
+#### Customer Lookup (res.partner)
+```python
+# Search by phone number (most reliable)
+customers = models.execute_kw(db, uid, password, 'res.partner', 'search_read',
+    [["|", ("phone", "=", phone), ("mobile", "=", phone)]],
+    {"fields": ["id", "name", "phone", "email"], "limit": 5}
+)
+
+# Search by name (fuzzy)
+customers = models.execute_kw(db, uid, password, 'res.partner', 'search_read',
+    [[("name", "ilike", customer_name)]],
+    {"fields": ["id", "name"], "limit": 5}
+)
+```
+
+#### Product Lookup (product.product)
+```python
+products = models.execute_kw(db, uid, password, 'product.product', 'search_read',
+    [[("name", "ilike", product_name), ("sale_ok", "=", True)]],
+    {"fields": ["id", "name", "default_code", "list_price", "uom_id"], "limit": 10}
+)
+```
+
+#### Create Sales Order (sale.order)
+```python
+order_id = models.execute_kw(db, uid, password, 'sale.order', 'create', [{
+    'partner_id': customer_id,  # Required: Odoo customer ID
+    'order_line': [
+        (0, 0, {'product_id': 101, 'product_uom_qty': 50, 'price_unit': 2500.0}),
+        (0, 0, {'product_id': 102, 'product_uom_qty': 20, 'price_unit': 1800.0}),
+    ],
+    'note': 'Source: WhatsApp\nRequested delivery: Friday',
+}])
+
+# Optionally confirm the order
+models.execute_kw(db, uid, password, 'sale.order', 'action_confirm', [[order_id]])
+```
+
+### Integration Architecture
+
+```
+┌──────────────────┐     ┌──────────────────┐     ┌──────────────────┐
+│  Order Extractor │────▶│   Odoo Client    │────▶│   Odoo ERP       │
+│  (LLM)           │     │                  │     │                  │
+└──────────────────┘     │  1. Find customer│     │  - res.partner   │
+                         │  2. Match products│     │  - product.product│
+                         │  3. Create order │     │  - sale.order    │
+                         └──────────────────┘     └──────────────────┘
+```
+
+### Product Matching Strategy
+
+Since extracted product names won't exactly match Odoo product names, we implement fuzzy matching:
+
+1. **Exact match** - Try direct name lookup first
+2. **Contains match** - Check if extracted name is contained in product name
+3. **Word match** - Match individual words (e.g., "rice" matches "Rice (Basmati) 25kg")
+4. **Fuzzy similarity** - Use sequence matching for typos/variations
+
+Products that can't be matched are flagged in the order notes for manual resolution.
+
+### Environment Variables for Odoo
+
+```bash
+# .env
+ODOO_URL=https://your-instance.odoo.com
+ODOO_DATABASE=your-database
+ODOO_USERNAME=api-user@company.com
+ODOO_PASSWORD=your-api-key
+```
+
+### Error Handling
+
+| Error | Handling |
+|-------|----------|
+| Customer not found | Create order in review queue, flag for customer creation |
+| Product not matched | Include in order notes, create with available products |
+| Connection timeout | Retry with exponential backoff, fallback to queue |
+| Authentication failure | Alert ops team, log for investigation |
+
+---
+
 ## Questions I Would Ask the Client
 
 1. What's the structure of product SKUs/names in Odoo? How standardized?

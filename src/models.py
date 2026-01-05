@@ -48,6 +48,16 @@ class ERPOrderPayload(BaseModel):
     requires_review: bool = Field(default=False)
 
 
+class OdooSubmissionResult(BaseModel):
+    """Result of submitting an order to Odoo."""
+
+    success: bool
+    order_id: Optional[int] = None
+    order_name: Optional[str] = None
+    error: Optional[str] = None
+    unmatched_products: list[str] = Field(default_factory=list)
+
+
 class ProcessingResult(BaseModel):
     """Complete result of processing a WhatsApp order message."""
 
@@ -55,4 +65,5 @@ class ProcessingResult(BaseModel):
     extracted_order: Optional[ExtractedOrder] = None
     erp_payload: Optional[ERPOrderPayload] = None
     confirmation_message: Optional[str] = None
+    odoo_result: Optional[OdooSubmissionResult] = None
     error: Optional[str] = None

@@ -46,6 +46,9 @@ python3 main.py --message "Hi, this is Mary from Saruni Mara. We need 50kg rice 
 # Run all sample messages
 python3 main.py --test
 
+# Run with Odoo integration (mock client)
+python3 main.py --test --odoo
+
 # Get JSON output
 python3 main.py --message "Order for 50kg rice" --json
 ```
@@ -59,6 +62,7 @@ python3 main.py --message "Order for 50kg rice" --json
 │   ├── extractor.py        # LLM-based order extraction
 │   ├── confirmation.py     # Confirmation message generation
 │   ├── erp_payload.py      # ERP payload builder
+│   ├── odoo_client.py      # Odoo ERP integration client
 │   └── processor.py        # Main processing pipeline
 ├── tests/
 │   └── test_extraction.py  # Unit and integration tests
@@ -81,12 +85,18 @@ WhatsApp Message
 │  ExtractedOrder │ ── Pydantic model with confidence scores
 └────────┬────────┘
          │
-    ┌────┴────┐
-    ▼         ▼
-┌───────┐ ┌──────────────┐
-│ ERP   │ │ Confirmation │
-│Payload│ │ Generator    │
-└───────┘ └──────────────┘
+    ┌────┼────────┐
+    ▼    ▼        ▼
+┌───────┐ ┌────────────┐ ┌──────────────┐
+│ ERP   │ │ Odoo       │ │ Confirmation │
+│Payload│ │ Client     │ │ Generator    │
+└───────┘ │ (optional) │ └──────────────┘
+          └─────┬──────┘
+                ▼
+          ┌───────────┐
+          │ Odoo ERP  │
+          │ (XML-RPC) │
+          └───────────┘
 ```
 
 ## Key Features
@@ -114,7 +124,28 @@ Orders with low confidence are flagged for human review.
 - `extractor.py`: LLM interaction isolated
 - `erp_payload.py`: ERP format conversion (no LLM)
 - `confirmation.py`: Both LLM and template-based options
+- `odoo_client.py`: Odoo ERP integration
 - Easy to swap LLM providers or add new output formats
+
+### 5. Odoo Integration
+The prototype includes a complete Odoo ERP integration:
+- **Customer lookup** via `res.partner` with fuzzy name matching
+- **Product matching** via `product.product` with multi-strategy search
+- **Order creation** via `sale.order` with line items
+- **Mock client** for testing without a real Odoo instance
+
+```bash
+# Run with mock Odoo integration
+python3 main.py --test --odoo
+```
+
+Output includes Odoo order ID and any unmatched products:
+```
+🏢 ODOO SUBMISSION
+------------------------------------------------------------
+  ✅ Order created: SO1001 (ID: 1001)
+  ⚠️  Unmatched products: cleaning stuff
+```
 
 ## Sample Output
 
