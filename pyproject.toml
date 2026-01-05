@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "whatsapp-order-intake"
+version = "0.1.0"
+description = "AI-powered WhatsApp order intake automation for B2B distributors"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "anthropic>=0.39.0",
+    "pydantic>=2.0.0",
+    "python-dotenv>=1.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+]
+
+[tool.pytest.ini_options]
+markers = [
+    "integration: marks tests as integration tests (require API key)",
+]
+testpaths = ["tests"]
