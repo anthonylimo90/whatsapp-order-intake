@@ -154,18 +154,46 @@ class OrderExtractor:
         if not customer_name:
             customer_name = customer_org or "Unknown Customer"
 
-        # Convert to Pydantic model
-        items = [
-            ExtractedItem(
-                product_name=item["product_name"],
-                quantity=item["quantity"],
-                unit=item["unit"],
-                confidence=ConfidenceLevel(item["confidence"]),
-                original_text=item["original_text"],
-                notes=item.get("notes"),
-            )
-            for item in data["items"]
-        ]
+        # Convert to Pydantic model, handling missing/null values
+        items = []
+        clarification_from_invalid = []
+
+        for item in data["items"]:
+            product_name = item.get("product_name")
+            quantity = item.get("quantity")
+            unit = item.get("unit")
+
+            # Skip items with missing critical fields, add to clarification
+            if not product_name:
+                continue
+
+            if quantity is None or unit is None:
+                # Item mentioned but quantity/unit unclear - add to clarification
+                clarification_from_invalid.append(
+                    f"Please specify quantity and unit for: {product_name} (from: '{item.get('original_text', 'unclear')}')"
+                )
+                # Still add the item with defaults so user can see what was detected
+                items.append(
+                    ExtractedItem(
+                        product_name=product_name,
+                        quantity=quantity if quantity is not None else 1.0,
+                        unit=unit if unit is not None else "units",
+                        confidence=ConfidenceLevel.LOW,
+                        original_text=item.get("original_text", ""),
+                        notes=item.get("notes") or "Quantity/unit unclear - needs clarification",
+                    )
+                )
+            else:
+                items.append(
+                    ExtractedItem(
+                        product_name=product_name,
+                        quantity=float(quantity),
+                        unit=str(unit),
+                        confidence=ConfidenceLevel(item.get("confidence", "low")),
+                        original_text=item.get("original_text", ""),
+                        notes=item.get("notes"),
+                    )
+                )
 
         # Parse detected language (default to English if not provided)
         detected_lang = data.get("detected_language", "english")
@@ -174,15 +202,24 @@ class OrderExtractor:
         except ValueError:
             detected_language = DetectedLanguage.ENGLISH
 
+        # Merge clarification needs
+        clarification_needed = data.get("clarification_needed", []) + clarification_from_invalid
+        requires_clarification = data.get("requires_clarification", False) or len(clarification_from_invalid) > 0
+
+        # If we had invalid items, downgrade overall confidence
+        overall_confidence = data.get("overall_confidence", "low")
+        if clarification_from_invalid:
+            overall_confidence = "low"
+
         return ExtractedOrder(
             customer_name=customer_name,
             customer_organization=customer_org,
             items=items,
             requested_delivery_date=data.get("requested_delivery_date"),
             delivery_urgency=data.get("delivery_urgency"),
-            overall_confidence=ConfidenceLevel(data["overall_confidence"]),
-            requires_clarification=data["requires_clarification"],
-            clarification_needed=data.get("clarification_needed", []),
+            overall_confidence=ConfidenceLevel(overall_confidence),
+            requires_clarification=requires_clarification,
+            clarification_needed=clarification_needed,
             detected_language=detected_language,
             raw_message=message,
         )
