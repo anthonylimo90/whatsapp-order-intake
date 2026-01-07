@@ -261,4 +261,4 @@ async def handle_whatsapp(request: Request):
 
 ## License
 
-MIT License - Built for PEV Studio AI Engineer Assessment
+MIT License
