@@ -31,13 +31,13 @@ async function fetchJSON<T>(url: string, options?: RequestInit): Promise<T> {
 
 export const api = {
   // Messages
-  async processMessage(content: string, customerName?: string): Promise<ProcessMessageResponse> {
+  async processMessage(content: string, customerName?: string, messageType: string = 'text'): Promise<ProcessMessageResponse> {
     return fetchJSON(`${API_BASE}/messages`, {
       method: 'POST',
       body: JSON.stringify({
         content,
         customer_name: customerName,
-        message_type: 'text',
+        message_type: messageType,
       }),
     });
   },

@@ -123,3 +123,31 @@ body {
   background-color: var(--confidence-low);
   color: white;
 }
+
+/* Blinking cursor for transcription */
+@keyframes blink {
+  0%, 50% {
+    opacity: 1;
+  }
+  51%, 100% {
+    opacity: 0;
+  }
+}
+
+.animate-blink {
+  animation: blink 0.8s infinite;
+}
+
+/* Voice note waveform animation */
+@keyframes waveform {
+  0%, 100% {
+    height: 20%;
+  }
+  50% {
+    height: 100%;
+  }
+}
+
+.voice-waveform-bar {
+  animation: waveform 0.5s ease-in-out infinite;
+}

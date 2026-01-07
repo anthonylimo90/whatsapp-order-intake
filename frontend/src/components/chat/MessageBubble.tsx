@@ -1,3 +1,4 @@
+import { Mic } from 'lucide-react';
 import type { Message } from '../../types';
 
 interface MessageBubbleProps {
@@ -7,6 +8,7 @@ interface MessageBubbleProps {
 export function MessageBubble({ message }: MessageBubbleProps) {
   const isCustomer = message.role === 'customer';
   const isSystem = message.role === 'system';
+  const isVoiceNote = message.message_type === 'voice_transcription';
 
   const formatTime = (dateString: string) => {
     const date = new Date(dateString);
@@ -32,6 +34,29 @@ export function MessageBubble({ message }: MessageBubbleProps) {
       <div
         className={`message-bubble ${isCustomer ? 'outgoing' : 'incoming'}`}
       >
+        {isVoiceNote && (
+          <div className="flex items-center gap-2 mb-2 pb-2 border-b border-gray-200">
+            <div className="w-8 h-8 bg-green-500 rounded-full flex items-center justify-center">
+              <Mic className="w-4 h-4 text-white" />
+            </div>
+            <div className="flex-1">
+              <div className="flex items-center gap-1">
+                {/* Voice waveform visualization */}
+                {[...Array(20)].map((_, i) => (
+                  <div
+                    key={i}
+                    className="w-0.5 bg-green-600 rounded-full"
+                    style={{ height: `${8 + Math.sin(i * 0.5) * 8 + Math.random() * 4}px` }}
+                  />
+                ))}
+              </div>
+            </div>
+            <span className="text-xs text-gray-500">Voice Note</span>
+          </div>
+        )}
+        {isVoiceNote && (
+          <p className="text-xs text-gray-500 italic mb-1">Transcription:</p>
+        )}
         <p className="text-sm text-gray-800 whitespace-pre-wrap">{message.content}</p>
         <div className={`flex items-center gap-1 mt-1 ${isCustomer ? 'justify-end' : 'justify-start'}`}>
           <span className="text-[10px] text-gray-500">

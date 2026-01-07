@@ -111,9 +111,73 @@ PRODUCTS = [
     {"name": "Tissue Paper (Box of 100)", "category": "Paper Products", "unit": "box", "price": 180.0},
 ]
 
+# Sample order history for demo (shows "the usual" resolution)
+SAMPLE_ORDER_HISTORY = [
+    # Saruni Mara's typical orders
+    {
+        "customer_name": "Sarah Kimani",
+        "organization": "Saruni Mara",
+        "items": [
+            {"product_name": "Basmati Rice 25kg", "quantity": 2, "unit": "bag", "confidence": "high"},
+            {"product_name": "Sugar 25kg", "quantity": 1, "unit": "bag", "confidence": "high"},
+            {"product_name": "Vegetable Oil 20L", "quantity": 1, "unit": "jerrycan", "confidence": "high"},
+            {"product_name": "Eggs (Tray of 30)", "quantity": 5, "unit": "tray", "confidence": "high"},
+        ],
+        "confidence_score": 0.95,
+    },
+    {
+        "customer_name": "Sarah Kimani",
+        "organization": "Saruni Mara",
+        "items": [
+            {"product_name": "Basmati Rice 25kg", "quantity": 2, "unit": "bag", "confidence": "high"},
+            {"product_name": "Fresh Milk 20L", "quantity": 2, "unit": "jerrycan", "confidence": "high"},
+            {"product_name": "White Bread Loaf", "quantity": 20, "unit": "loaf", "confidence": "high"},
+            {"product_name": "Butter 500g", "quantity": 10, "unit": "pack", "confidence": "high"},
+        ],
+        "confidence_score": 0.95,
+    },
+    # Governors Camp typical orders
+    {
+        "customer_name": "Peter Omondi",
+        "organization": "Governors Camp",
+        "items": [
+            {"product_name": "Bar Soap (Box of 12)", "quantity": 5, "unit": "box", "confidence": "high"},
+            {"product_name": "Wheat Flour 25kg", "quantity": 2, "unit": "bag", "confidence": "high"},
+            {"product_name": "Multi-Surface Cleaner 5L", "quantity": 3, "unit": "bottle", "confidence": "high"},
+        ],
+        "confidence_score": 0.95,
+    },
+    {
+        "customer_name": "Peter Omondi",
+        "organization": "Governors Camp",
+        "items": [
+            {"product_name": "Pishori Rice 25kg", "quantity": 3, "unit": "bag", "confidence": "high"},
+            {"product_name": "Vegetable Oil 10L", "quantity": 2, "unit": "jerrycan", "confidence": "high"},
+            {"product_name": "Eggs (Tray of 30)", "quantity": 5, "unit": "tray", "confidence": "high"},
+            {"product_name": "Bar Soap (Box of 12)", "quantity": 3, "unit": "box", "confidence": "high"},
+        ],
+        "confidence_score": 0.95,
+    },
+    # Angama Mara typical orders
+    {
+        "customer_name": "James Mwangi",
+        "organization": "Angama Mara",
+        "items": [
+            {"product_name": "Basmati Rice 25kg", "quantity": 1, "unit": "bag", "confidence": "high"},
+            {"product_name": "Sugar 25kg", "quantity": 1, "unit": "bag", "confidence": "high"},
+            {"product_name": "Fresh Milk 20L", "quantity": 1, "unit": "jerrycan", "confidence": "high"},
+            {"product_name": "Mixed Salad Greens 1kg", "quantity": 5, "unit": "kg", "confidence": "high"},
+        ],
+        "confidence_score": 0.95,
+    },
+]
+
 
 async def seed_database(session: AsyncSession):
     """Seed the database with demo data."""
+    from .models import Order
+    from datetime import datetime, timedelta
+
     # Check if already seeded
     result = await session.execute(select(Customer).limit(1))
     if result.scalar_one_or_none():
@@ -132,8 +196,25 @@ async def seed_database(session: AsyncSession):
         product = Product(**product_data)
         session.add(product)
 
+    await session.flush()
+
+    # Add sample order history
+    base_date = datetime.utcnow() - timedelta(days=30)
+    for i, order_data in enumerate(SAMPLE_ORDER_HISTORY):
+        order = Order(
+            customer_name=order_data["customer_name"],
+            organization=order_data["organization"],
+            items_json={"items": order_data["items"]},
+            confidence_score=order_data["confidence_score"],
+            overall_confidence="high",
+            status="completed",
+            routing_decision="auto_process",
+            created_at=base_date + timedelta(days=i * 5),
+        )
+        session.add(order)
+
     await session.commit()
-    print(f"Seeded {len(CUSTOMERS)} customers and {len(PRODUCTS)} products")
+    print(f"Seeded {len(CUSTOMERS)} customers, {len(PRODUCTS)} products, and {len(SAMPLE_ORDER_HISTORY)} historical orders")
 
 
 async def reset_and_seed(session: AsyncSession):

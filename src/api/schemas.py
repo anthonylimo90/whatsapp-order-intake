@@ -51,6 +51,7 @@ class ExtractionResultResponse(BaseModel):
     overall_confidence: str
     requires_clarification: bool
     clarification_needed: list[str]
+    detected_language: str = "english"
 
 
 class OrderResponse(BaseModel):

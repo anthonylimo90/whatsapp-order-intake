@@ -85,7 +85,7 @@ export function ChatContainer() {
 
       {/* Input */}
       <MessageInput
-        onSend={sendMessage}
+        onSend={(content, messageType) => sendMessage(content, messageType)}
         disabled={isProcessing}
         placeholder={
           needsClarification

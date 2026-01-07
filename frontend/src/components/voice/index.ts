@@ -1,0 +1,1 @@
+export { VoiceNoteModal } from './VoiceNoteModal';

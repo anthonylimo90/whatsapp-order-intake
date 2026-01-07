@@ -22,6 +22,12 @@ class ExtractedItem(BaseModel):
     notes: Optional[str] = Field(default=None, description="Any ambiguity or clarification needed")
 
 
+class DetectedLanguage(str, Enum):
+    ENGLISH = "english"
+    SWAHILI = "swahili"
+    MIXED = "mixed"
+
+
 class ExtractedOrder(BaseModel):
     """Structured order data extracted from a WhatsApp message."""
 
@@ -33,6 +39,7 @@ class ExtractedOrder(BaseModel):
     overall_confidence: ConfidenceLevel = Field(description="Overall confidence in the extraction")
     requires_clarification: bool = Field(description="Whether human follow-up is needed")
     clarification_needed: list[str] = Field(default_factory=list, description="List of items needing clarification")
+    detected_language: DetectedLanguage = Field(default=DetectedLanguage.ENGLISH, description="Primary language detected in the message")
     raw_message: str = Field(description="Original message text")
 
 

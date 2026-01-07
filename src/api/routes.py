@@ -11,6 +11,11 @@ from sqlalchemy.orm import selectinload
 from ..db import get_db, Conversation, Message, Order, OrderItem, Customer, Product
 from ..processor import OrderProcessor
 from ..models import ConfidenceLevel
+from ..services.history import (
+    get_customer_order_history,
+    get_customer_frequent_items,
+    format_order_history_context,
+)
 from .schemas import (
     MessageCreate,
     ClarificationResponse,
@@ -121,10 +126,48 @@ async def process_message(
     db.add(customer_message)
     await db.flush()
 
+    # Try to extract customer/organization for history lookup
+    # Simple pattern matching for common formats
+    order_history_context = ""
+    message_lower = request.content.lower()
+
+    # Try to identify organization from message
+    organization_hints = None
+    for keyword in ["from ", "- ", "here at ", "at "]:
+        if keyword in message_lower:
+            # Extract potential organization name
+            parts = message_lower.split(keyword)
+            if len(parts) > 1:
+                # Take the part after the keyword, clean it up
+                potential_org = parts[-1].split(".")[0].split(",")[0].split("\n")[0].strip()
+                if len(potential_org) > 3 and len(potential_org) < 50:
+                    organization_hints = potential_org
+                    break
+
+    # Fetch order history if we identified a potential customer
+    if organization_hints or request.customer_name:
+        try:
+            history = await get_customer_order_history(
+                db,
+                customer_name=request.customer_name,
+                organization=organization_hints,
+                limit=5,
+            )
+            frequent_items = await get_customer_frequent_items(
+                db,
+                customer_name=request.customer_name,
+                organization=organization_hints,
+                limit=10,
+            )
+            order_history_context = format_order_history_context(history, frequent_items)
+        except Exception:
+            # Don't fail if history lookup fails
+            pass
+
     # Process the message
     processor = OrderProcessor()
     try:
-        result = await processor.process(request.content)
+        result = processor.process(request.content, order_history_context=order_history_context)
     except Exception as e:
         await db.rollback()
         raise HTTPException(status_code=500, detail=f"Processing error: {str(e)}")
@@ -232,6 +275,7 @@ async def process_message(
         overall_confidence=extracted.overall_confidence.value,
         requires_clarification=extracted.requires_clarification,
         clarification_needed=extracted.clarification_needed,
+        detected_language=extracted.detected_language.value if hasattr(extracted, 'detected_language') else "english",
     )
 
     return ProcessMessageResponse(
@@ -469,6 +513,7 @@ Customer clarification:
         overall_confidence=extracted.overall_confidence.value,
         requires_clarification=extracted.requires_clarification,
         clarification_needed=extracted.clarification_needed,
+        detected_language=extracted.detected_language.value if hasattr(extracted, 'detected_language') else "english",
     )
 
     return ProcessMessageResponse(

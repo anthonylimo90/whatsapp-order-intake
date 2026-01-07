@@ -30,7 +30,7 @@ interface ChatState {
   confidenceDistribution: ConfidenceDistribution | null;
 
   // Actions
-  sendMessage: (content: string) => Promise<void>;
+  sendMessage: (content: string, messageType?: string) => Promise<void>;
   sendClarification: (content: string) => Promise<void>;
   loadSampleMessages: () => Promise<void>;
   useSampleMessage: (sample: SampleMessage) => void;
@@ -51,7 +51,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   metrics: null,
   confidenceDistribution: null,
 
-  sendMessage: async (content: string) => {
+  sendMessage: async (content: string, messageType: string = 'text') => {
     const { conversationId } = get();
 
     // Add user message immediately
@@ -59,7 +59,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       id: Date.now(),
       role: 'customer',
       content,
-      message_type: 'text',
+      message_type: messageType,
       created_at: new Date().toISOString(),
     };
 
@@ -80,7 +80,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         response = await api.submitClarification(conversationId, content);
       } else {
         // Start new conversation
-        response = await api.processMessage(content);
+        response = await api.processMessage(content, undefined, messageType);
       }
 
       // Add assistant response

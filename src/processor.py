@@ -36,6 +36,7 @@ class OrderProcessor:
         message: str,
         use_simple_confirmation: bool = False,
         submit_to_odoo: bool = False,
+        order_history_context: str = "",
     ) -> ProcessingResult:
         """
         Process a WhatsApp order message end-to-end.
@@ -44,13 +45,14 @@ class OrderProcessor:
             message: Raw WhatsApp message text
             use_simple_confirmation: Use template-based confirmation (no LLM call)
             submit_to_odoo: Whether to submit the order to Odoo ERP
+            order_history_context: Optional context about customer's past orders
 
         Returns:
             ProcessingResult with extraction, ERP payload, confirmation, and optional Odoo result
         """
         try:
-            # Step 1: Extract order data from message
-            extracted_order = self.extractor.extract(message)
+            # Step 1: Extract order data from message (with history context if available)
+            extracted_order = self.extractor.extract(message, order_history_context)
 
             # Step 2: Build ERP-ready payload
             erp_payload = build_erp_payload(extracted_order)

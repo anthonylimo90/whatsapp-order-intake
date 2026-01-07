@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 from typing import Optional
 from anthropic import Anthropic
-from .models import ExtractedOrder, ConfidenceLevel, ExtractedItem
+from .models import ExtractedOrder, ConfidenceLevel, ExtractedItem, DetectedLanguage
 
 
 EXTRACTION_SYSTEM_PROMPT = """You are an order extraction assistant for Kijani Supplies, a B2B distributor serving lodges and hotels in East Africa.
@@ -45,7 +45,24 @@ EXTRACTION RULES:
    - Unknown product names → Include as-is, mark MEDIUM confidence
    - Brand preferences mentioned → Include in notes
 
-6. OVERALL CONFIDENCE:
+6. LANGUAGE SUPPORT:
+   - Messages may be in English, Swahili, or mixed (code-switching)
+   - Extract data regardless of language
+   - Common Swahili terms:
+     * "tunahitaji" = "we need"
+     * "tafadhali" = "please"
+     * "kesho" = "tomorrow"
+     * "asubuhi" = "morning"
+     * "mchele" = "rice"
+     * "sukari" = "sugar"
+     * "mafuta" = "oil"
+     * "mayai" = "eggs"
+     * "maziwa" = "milk"
+     * "mkate" = "bread"
+   - Detect the primary language used and include it in your response
+   - Generate any clarification questions in the same language as the input
+
+7. OVERALL CONFIDENCE:
    - HIGH: All items HIGH confidence, customer clearly identified
    - MEDIUM: Some items MEDIUM confidence, or minor clarifications needed
    - LOW: Any item LOW confidence, or critical info missing
@@ -53,9 +70,16 @@ EXTRACTION RULES:
 Always set requires_clarification=true if ANY item needs follow-up."""
 
 
-def create_extraction_prompt(message: str) -> str:
+def create_extraction_prompt(message: str, order_history_context: str = "") -> str:
     """Create the extraction prompt for a WhatsApp message."""
-    return f"""Extract the order information from this WhatsApp message:
+    history_section = ""
+    if order_history_context:
+        history_section = f"""
+{order_history_context}
+
+"""
+
+    return f"""{history_section}Extract the order information from this WhatsApp message:
 
 <message>
 {message}
@@ -80,6 +104,7 @@ Return a JSON object with this exact structure:
     "overall_confidence": "high" | "medium" | "low",
     "requires_clarification": boolean,
     "clarification_needed": ["string"] - list of things needing follow-up,
+    "detected_language": "english" | "swahili" | "mixed" - primary language detected,
     "raw_message": "string - copy of original message"
 }}"""
 
@@ -91,12 +116,13 @@ class OrderExtractor:
         """Initialize the extractor with Anthropic client."""
         self.client = Anthropic(api_key=api_key) if api_key else Anthropic()
 
-    def extract(self, message: str) -> ExtractedOrder:
+    def extract(self, message: str, order_history_context: str = "") -> ExtractedOrder:
         """
         Extract order information from a WhatsApp message.
 
         Args:
             message: The raw WhatsApp message text
+            order_history_context: Optional context about customer's order history
 
         Returns:
             ExtractedOrder with structured data and confidence scores
@@ -106,7 +132,7 @@ class OrderExtractor:
             max_tokens=2000,
             system=EXTRACTION_SYSTEM_PROMPT,
             messages=[
-                {"role": "user", "content": create_extraction_prompt(message)}
+                {"role": "user", "content": create_extraction_prompt(message, order_history_context)}
             ],
         )
 
@@ -141,6 +167,13 @@ class OrderExtractor:
             for item in data["items"]
         ]
 
+        # Parse detected language (default to English if not provided)
+        detected_lang = data.get("detected_language", "english")
+        try:
+            detected_language = DetectedLanguage(detected_lang)
+        except ValueError:
+            detected_language = DetectedLanguage.ENGLISH
+
         return ExtractedOrder(
             customer_name=customer_name,
             customer_organization=customer_org,
@@ -150,5 +183,6 @@ class OrderExtractor:
             overall_confidence=ConfidenceLevel(data["overall_confidence"]),
             requires_clarification=data["requires_clarification"],
             clarification_needed=data.get("clarification_needed", []),
+            detected_language=detected_language,
             raw_message=message,
         )
