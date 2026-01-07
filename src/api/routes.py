@@ -438,7 +438,7 @@ Customer clarification:
     # Reprocess with clarification context
     processor = OrderProcessor()
     try:
-        result = await processor.process(combined_message)
+        result = processor.process(combined_message)
     except Exception as e:
         await db.rollback()
         raise HTTPException(status_code=500, detail=f"Processing error: {str(e)}")
