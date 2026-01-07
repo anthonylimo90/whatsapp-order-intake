@@ -168,3 +168,41 @@ class SampleMessage(BaseModel):
     message: str
     expected_confidence: str
     language: str = "english"
+
+
+# Excel order schemas
+class ExcelOrderItemResponse(BaseModel):
+    """An item from an Excel order."""
+    category: str
+    subcategory: Optional[str] = None
+    product_name: str
+    unit: str
+    price: Optional[float] = None
+    quantity: float
+    row_number: int
+
+
+class ExcelOrderSheetResponse(BaseModel):
+    """A category/worksheet from an Excel order."""
+    category: str
+    items: list[ExcelOrderItemResponse]
+    total_items: int
+    total_value: Optional[float] = None
+
+
+class ExcelOrderResponse(BaseModel):
+    """Response after processing an Excel order file."""
+    success: bool
+    filename: Optional[str] = None
+    customer_name: Optional[str] = None
+    sheets: list[ExcelOrderSheetResponse] = []
+    total_items: int = 0
+    total_categories: int = 0
+    total_value: Optional[float] = None
+    warnings: list[str] = []
+    error: Optional[str] = None
+    # Integration with existing order flow
+    conversation_id: Optional[int] = None
+    order_id: Optional[int] = None
+    confirmation_message: Optional[str] = None
+    routing_decision: Optional[str] = None

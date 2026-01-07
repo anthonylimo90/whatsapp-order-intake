@@ -13,3 +13,6 @@ python-multipart>=0.0.6
 # Database
 sqlalchemy>=2.0.0
 aiosqlite>=0.19.0
+
+# Excel parsing
+openpyxl>=3.1.0

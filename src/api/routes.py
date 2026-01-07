@@ -3,7 +3,7 @@
 import time
 from datetime import datetime, timedelta
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -16,6 +16,7 @@ from ..services.history import (
     get_customer_frequent_items,
     format_order_history_context,
 )
+from ..services.excel_parser import parse_excel_order, excel_order_to_text
 from .schemas import (
     MessageCreate,
     ClarificationResponse,
@@ -31,6 +32,9 @@ from .schemas import (
     CustomerResponse,
     ProductResponse,
     SampleMessage,
+    ExcelOrderResponse,
+    ExcelOrderSheetResponse,
+    ExcelOrderItemResponse,
 )
 
 router = APIRouter()
@@ -710,3 +714,201 @@ async def list_products(db: AsyncSession = Depends(get_db)):
 async def get_sample_messages():
     """Get sample messages for the gallery."""
     return SAMPLE_MESSAGES
+
+
+@router.post("/excel-order", response_model=ExcelOrderResponse)
+async def process_excel_order(
+    file: UploadFile = File(...),
+    customer_name: Optional[str] = Form(None),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Process an Excel order file with multiple worksheets.
+
+    Each worksheet is treated as a category (e.g., Dairy, Produce, Beverages).
+    Expected columns: Subcategory, Product Name, Unit, Price, Opening Order (quantity).
+    """
+    start_time = time.time()
+
+    # Validate file type
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="No filename provided")
+
+    if not file.filename.endswith(('.xlsx', '.xls')):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid file type. Please upload an Excel file (.xlsx or .xls)"
+        )
+
+    # Read file content
+    try:
+        content = await file.read()
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to read file: {str(e)}")
+
+    # Parse Excel file
+    result = parse_excel_order(content, filename=file.filename, customer_name=customer_name)
+
+    if not result.success:
+        return ExcelOrderResponse(
+            success=False,
+            filename=file.filename,
+            error=result.error,
+        )
+
+    # Convert to text for LLM processing
+    order_text = excel_order_to_text(result)
+
+    # Create conversation for this Excel order
+    conversation = Conversation(
+        customer_name=customer_name or result.customer_name or "Excel Order",
+        status="active",
+    )
+    db.add(conversation)
+    await db.flush()
+
+    # Add the Excel order as a message
+    excel_message = Message(
+        conversation_id=conversation.id,
+        role="customer",
+        content=f"[Excel Order: {file.filename}]\n\n{order_text}",
+        message_type="excel_order",
+    )
+    db.add(excel_message)
+    await db.flush()
+
+    # Process through the standard order processor for confirmation
+    processor = OrderProcessor()
+    try:
+        process_result = processor.process(order_text)
+    except Exception as e:
+        await db.rollback()
+        return ExcelOrderResponse(
+            success=True,
+            filename=file.filename,
+            customer_name=customer_name,
+            sheets=[
+                ExcelOrderSheetResponse(
+                    category=s.category,
+                    items=[
+                        ExcelOrderItemResponse(
+                            category=i.category,
+                            subcategory=i.subcategory,
+                            product_name=i.product_name,
+                            unit=i.unit,
+                            price=i.price,
+                            quantity=i.quantity,
+                            row_number=i.row_number,
+                        )
+                        for i in s.items
+                    ],
+                    total_items=s.total_items,
+                    total_value=s.total_value,
+                )
+                for s in result.sheets
+            ],
+            total_items=result.total_items,
+            total_categories=result.total_categories,
+            total_value=result.total_value,
+            warnings=result.warnings + [f"LLM processing failed: {str(e)}"],
+            error=None,
+        )
+
+    processing_time_ms = int((time.time() - start_time) * 1000)
+
+    # Create order record
+    # For Excel orders, we use high confidence since data is structured
+    confidence_score = 0.95
+    routing_decision = "auto_process"
+
+    order = Order(
+        conversation_id=conversation.id,
+        customer_name=customer_name or result.customer_name or "Excel Order",
+        organization=customer_name,
+        items_json={
+            "source": "excel",
+            "filename": file.filename,
+            "categories": [s.category for s in result.sheets],
+            "items": [
+                {
+                    "category": item.category,
+                    "subcategory": item.subcategory,
+                    "product_name": item.product_name,
+                    "quantity": item.quantity,
+                    "unit": item.unit,
+                    "price": item.price,
+                }
+                for sheet in result.sheets
+                for item in sheet.items
+            ],
+        },
+        confidence_score=confidence_score,
+        overall_confidence="high",
+        requires_review=False,
+        requires_clarification=False,
+        status="auto_process",
+        routing_decision=routing_decision,
+        processing_time_ms=processing_time_ms,
+    )
+    db.add(order)
+    await db.flush()
+
+    # Create order items for history tracking
+    for sheet in result.sheets:
+        for item in sheet.items:
+            order_item = OrderItem(
+                order_id=order.id,
+                product_name=item.product_name,
+                quantity=item.quantity,
+                unit=item.unit,
+                confidence="high",
+            )
+            db.add(order_item)
+
+    # Add confirmation message
+    confirmation = process_result.confirmation_message if process_result.success else None
+    if confirmation:
+        assistant_message = Message(
+            conversation_id=conversation.id,
+            role="assistant",
+            content=confirmation,
+            message_type="text",
+        )
+        db.add(assistant_message)
+
+    conversation.status = "completed"
+    await db.commit()
+
+    return ExcelOrderResponse(
+        success=True,
+        filename=file.filename,
+        customer_name=customer_name or result.customer_name,
+        sheets=[
+            ExcelOrderSheetResponse(
+                category=s.category,
+                items=[
+                    ExcelOrderItemResponse(
+                        category=i.category,
+                        subcategory=i.subcategory,
+                        product_name=i.product_name,
+                        unit=i.unit,
+                        price=i.price,
+                        quantity=i.quantity,
+                        row_number=i.row_number,
+                    )
+                    for i in s.items
+                ],
+                total_items=s.total_items,
+                total_value=s.total_value,
+            )
+            for s in result.sheets
+        ],
+        total_items=result.total_items,
+        total_categories=result.total_categories,
+        total_value=result.total_value,
+        warnings=result.warnings,
+        conversation_id=conversation.id,
+        order_id=order.id,
+        confirmation_message=confirmation,
+        routing_decision=routing_decision,
+    )
