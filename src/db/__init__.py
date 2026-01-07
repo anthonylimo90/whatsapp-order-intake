@@ -1,7 +1,17 @@
 """Database package."""
 
 from .database import get_db, init_db, AsyncSessionLocal
-from .models import Conversation, Message, Order, OrderItem, Customer, Product
+from .models import (
+    Conversation,
+    Message,
+    Order,
+    OrderItem,
+    Customer,
+    Product,
+    CumulativeOrderState,
+    OrderSnapshot,
+    CumulativeOrderItem,
+)
 
 __all__ = [
     "get_db",
@@ -13,4 +23,7 @@ __all__ = [
     "OrderItem",
     "Customer",
     "Product",
+    "CumulativeOrderState",
+    "OrderSnapshot",
+    "CumulativeOrderItem",
 ]

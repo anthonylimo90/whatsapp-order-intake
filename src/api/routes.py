@@ -8,7 +8,18 @@ from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from ..db import get_db, Conversation, Message, Order, OrderItem, Customer, Product
+from ..db import (
+    get_db,
+    Conversation,
+    Message,
+    Order,
+    OrderItem,
+    Customer,
+    Product,
+    CumulativeOrderState,
+    OrderSnapshot,
+    CumulativeOrderItem,
+)
 from ..processor import OrderProcessor
 from ..models import ConfidenceLevel
 from ..services.history import (
@@ -17,6 +28,7 @@ from ..services.history import (
     format_order_history_context,
 )
 from ..services.excel_parser import parse_excel_order, excel_order_to_text
+from ..services.order_state import OrderStateManager
 from .schemas import (
     MessageCreate,
     ClarificationResponse,
@@ -35,6 +47,12 @@ from .schemas import (
     ExcelOrderResponse,
     ExcelOrderSheetResponse,
     ExcelOrderItemResponse,
+    CumulativeItemResponse,
+    CumulativeStateResponse,
+    ChangesResponse,
+    ItemChangeResponse,
+    SnapshotResponse,
+    ConversationStateResponse,
 )
 
 router = APIRouter()
@@ -102,6 +120,72 @@ def get_routing_decision(confidence_score: float, requires_clarification: bool) 
         return "review"
     else:
         return "manual"
+
+
+def build_cumulative_state_response(state: CumulativeOrderState) -> CumulativeStateResponse:
+    """Build CumulativeStateResponse from database model."""
+    items = state.items_json.get("items", [])
+    return CumulativeStateResponse(
+        id=state.id,
+        conversation_id=state.conversation_id,
+        items=[
+            CumulativeItemResponse(
+                product_name=item.get("product_name", ""),
+                normalized_name=item.get("normalized_name"),
+                quantity=item.get("quantity", 0),
+                unit=item.get("unit", ""),
+                confidence=item.get("confidence", "medium"),
+                original_text=item.get("original_text"),
+                notes=item.get("notes"),
+                modification_count=item.get("modification_count", 0),
+                is_active=item.get("is_active", True),
+                first_mentioned_message_id=item.get("first_mentioned_message_id"),
+                last_modified_message_id=item.get("last_modified_message_id"),
+            )
+            for item in items
+            if item.get("is_active", True)
+        ],
+        customer_name=state.customer_name,
+        customer_organization=state.customer_organization,
+        delivery_date=state.delivery_date,
+        urgency=state.urgency,
+        overall_confidence=state.overall_confidence or "medium",
+        requires_clarification=state.requires_clarification,
+        pending_clarifications=state.pending_clarifications or [],
+        version=state.version,
+        last_updated_at=state.last_updated_at,
+    )
+
+
+def build_changes_response(changes: dict) -> ChangesResponse:
+    """Build ChangesResponse from changes dict."""
+    return ChangesResponse(
+        added=[
+            CumulativeItemResponse(
+                product_name=item.get("product_name", ""),
+                normalized_name=item.get("normalized_name"),
+                quantity=item.get("quantity", 0),
+                unit=item.get("unit", ""),
+                confidence=item.get("confidence", "medium"),
+                original_text=item.get("original_text"),
+                notes=item.get("notes"),
+                modification_count=item.get("modification_count", 0),
+                is_active=item.get("is_active", True),
+            )
+            for item in changes.get("added", [])
+        ],
+        modified=[
+            ItemChangeResponse(
+                product_name=item.get("product_name", ""),
+                old_quantity=item.get("old_quantity"),
+                new_quantity=item.get("new_quantity", 0),
+                old_unit=item.get("old_unit"),
+                unit=item.get("unit", ""),
+            )
+            for item in changes.get("modified", [])
+        ],
+        unchanged=changes.get("unchanged", []),
+    )
 
 
 @router.post("/messages", response_model=ProcessMessageResponse)
@@ -240,6 +324,25 @@ async def process_message(
         )
         db.add(order_item)
 
+    # Initialize cumulative order state
+    state_manager = OrderStateManager(db)
+    cumulative_state = await state_manager.get_or_create_state(conversation.id)
+
+    # Merge extraction into cumulative state
+    changes = await state_manager.merge_extraction(
+        cumulative_state,
+        extracted,
+        customer_message.id,
+    )
+
+    # Create snapshot of current state
+    await state_manager.create_snapshot(
+        cumulative_state,
+        customer_message.id,
+        changes,
+        extracted,
+    )
+
     # Add confirmation message
     if result.confirmation_message:
         assistant_message = Message(
@@ -258,6 +361,10 @@ async def process_message(
     conversation.customer_name = extracted.customer_name
 
     await db.commit()
+
+    # Build cumulative state response
+    cumulative_state_response = build_cumulative_state_response(cumulative_state)
+    changes_response = build_changes_response(changes)
 
     # Build response
     extraction_response = ExtractionResultResponse(
@@ -304,6 +411,8 @@ async def process_message(
             created_at=order.created_at,
         ),
         routing_decision=routing_decision,
+        cumulative_state=cumulative_state_response,
+        changes=changes_response,
     )
 
 
@@ -393,6 +502,108 @@ async def get_conversation(
     )
 
 
+@router.get("/conversations/{conversation_id}/state", response_model=ConversationStateResponse)
+async def get_conversation_state(
+    conversation_id: int,
+    db: AsyncSession = Depends(get_db),
+):
+    """Get full conversation state including cumulative order and snapshots for frontend hydration."""
+    # Get conversation with messages and cumulative state
+    query = (
+        select(Conversation)
+        .options(
+            selectinload(Conversation.messages),
+            selectinload(Conversation.cumulative_state).selectinload(
+                CumulativeOrderState.snapshots
+            ),
+        )
+        .where(Conversation.id == conversation_id)
+    )
+    result = await db.execute(query)
+    conversation = result.scalar_one_or_none()
+
+    if not conversation:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    # Build cumulative state response if exists
+    cumulative_state_response = None
+    snapshots_response = []
+
+    if conversation.cumulative_state:
+        cumulative_state_response = build_cumulative_state_response(conversation.cumulative_state)
+
+        # Build snapshots response
+        for snapshot in conversation.cumulative_state.snapshots:
+            items = snapshot.items_json.get("items", [])
+            changes = snapshot.changes_json or {}
+
+            snapshots_response.append(
+                SnapshotResponse(
+                    id=snapshot.id,
+                    version=snapshot.version,
+                    items=[
+                        CumulativeItemResponse(
+                            product_name=item.get("product_name", ""),
+                            normalized_name=item.get("normalized_name"),
+                            quantity=item.get("quantity", 0),
+                            unit=item.get("unit", ""),
+                            confidence=item.get("confidence", "medium"),
+                            original_text=item.get("original_text"),
+                            notes=item.get("notes"),
+                            modification_count=item.get("modification_count", 0),
+                            is_active=item.get("is_active", True),
+                        )
+                        for item in items
+                    ],
+                    changes=ChangesResponse(
+                        added=[
+                            CumulativeItemResponse(
+                                product_name=item.get("product_name", ""),
+                                quantity=item.get("quantity", 0),
+                                unit=item.get("unit", ""),
+                                confidence=item.get("confidence", "medium"),
+                            )
+                            for item in changes.get("added", [])
+                        ],
+                        modified=[
+                            ItemChangeResponse(
+                                product_name=item.get("product_name", ""),
+                                old_quantity=item.get("old_quantity"),
+                                new_quantity=item.get("new_quantity", 0),
+                                unit=item.get("unit", ""),
+                            )
+                            for item in changes.get("modified", [])
+                        ],
+                        unchanged=changes.get("unchanged", []),
+                    ) if changes else None,
+                    message_id=snapshot.message_id,
+                    extraction_confidence=snapshot.extraction_confidence,
+                    requires_clarification=snapshot.requires_clarification,
+                    created_at=snapshot.created_at,
+                )
+            )
+
+    return ConversationStateResponse(
+        conversation_id=conversation.id,
+        customer_name=conversation.customer_name,
+        status=conversation.status,
+        messages=[
+            MessageResponse(
+                id=msg.id,
+                role=msg.role,
+                content=msg.content,
+                message_type=msg.message_type,
+                created_at=msg.created_at,
+            )
+            for msg in conversation.messages
+        ],
+        cumulative_state=cumulative_state_response,
+        snapshots=snapshots_response,
+        created_at=conversation.created_at,
+        updated_at=conversation.updated_at,
+    )
+
+
 @router.post("/conversations/{conversation_id}/clarify", response_model=ProcessMessageResponse)
 async def submit_clarification(
     conversation_id: int,
@@ -414,13 +625,9 @@ async def submit_clarification(
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
-    # Get original message
-    original_message = next(
-        (m for m in conversation.messages if m.role == "customer"),
-        None,
-    )
-    if not original_message:
-        raise HTTPException(status_code=400, detail="No original message found")
+    # Get or create cumulative state
+    state_manager = OrderStateManager(db)
+    cumulative_state = await state_manager.get_or_create_state(conversation_id)
 
     # Add clarification message
     clarification_message = Message(
@@ -432,17 +639,25 @@ async def submit_clarification(
     db.add(clarification_message)
     await db.flush()
 
-    # Build context with original message + clarification
-    combined_message = f"""Original order message:
-{original_message.content}
+    # Build FULL context with current state and all messages
+    full_context = state_manager.build_full_context(conversation.messages, cumulative_state)
 
-Customer clarification:
-{request.content}"""
+    # Enhanced message with full context
+    enhanced_message = f"""{full_context}
 
-    # Reprocess with clarification context
+NEW CLARIFICATION FROM CUSTOMER:
+{request.content}
+
+Based on the current order state and this clarification, extract any updates.
+If the customer is modifying an existing item (e.g., "change rice to 60kg"),
+return that item with the updated quantity.
+If adding new items, include them.
+Preserve items from current state that aren't being modified."""
+
+    # Reprocess with full context
     processor = OrderProcessor()
     try:
-        result = processor.process(combined_message)
+        result = processor.process(enhanced_message)
     except Exception as e:
         await db.rollback()
         raise HTTPException(status_code=500, detail=f"Processing error: {str(e)}")
@@ -484,6 +699,21 @@ Customer clarification:
     db.add(order)
     await db.flush()
 
+    # Merge extraction into cumulative state
+    changes = await state_manager.merge_extraction(
+        cumulative_state,
+        extracted,
+        clarification_message.id,
+    )
+
+    # Create snapshot of current state
+    await state_manager.create_snapshot(
+        cumulative_state,
+        clarification_message.id,
+        changes,
+        extracted,
+    )
+
     # Add confirmation message
     if result.confirmation_message:
         assistant_message = Message(
@@ -497,6 +727,10 @@ Customer clarification:
     # Update conversation status
     conversation.status = "completed" if not extracted.requires_clarification else "needs_clarification"
     await db.commit()
+
+    # Build cumulative state response
+    cumulative_state_response = build_cumulative_state_response(cumulative_state)
+    changes_response = build_changes_response(changes)
 
     extraction_response = ExtractionResultResponse(
         customer_name=extracted.customer_name,
@@ -542,6 +776,8 @@ Customer clarification:
             created_at=order.created_at,
         ),
         routing_decision=routing_decision,
+        cumulative_state=cumulative_state_response,
+        changes=changes_response,
     )
 
 
@@ -816,10 +1052,33 @@ async def process_excel_order(
 
     processing_time_ms = int((time.time() - start_time) * 1000)
 
-    # Create order record
-    # For Excel orders, we use high confidence since data is structured
-    confidence_score = 0.95
-    routing_decision = "auto_process"
+    # Calculate confidence based on data quality
+    # Check for missing prices, unclear units, etc.
+    items_with_price = sum(1 for s in result.sheets for i in s.items if i.price is not None)
+    total_items = result.total_items
+    price_coverage = items_with_price / total_items if total_items > 0 else 0
+
+    # Use LLM extraction result for confidence if available
+    if process_result.success and process_result.extracted_order:
+        extracted = process_result.extracted_order
+        confidence_map = {"high": 0.95, "medium": 0.75, "low": 0.50}
+        confidence_score = confidence_map.get(extracted.overall_confidence.value, 0.75)
+        overall_confidence = extracted.overall_confidence.value
+        requires_clarification = extracted.requires_clarification
+    else:
+        # Fallback: base confidence on data completeness
+        if price_coverage >= 0.9 and total_items > 0:
+            confidence_score = 0.95
+            overall_confidence = "high"
+        elif price_coverage >= 0.5:
+            confidence_score = 0.80
+            overall_confidence = "medium"
+        else:
+            confidence_score = 0.65
+            overall_confidence = "medium"
+        requires_clarification = False
+
+    routing_decision = get_routing_decision(confidence_score, requires_clarification)
 
     order = Order(
         conversation_id=conversation.id,
@@ -843,10 +1102,10 @@ async def process_excel_order(
             ],
         },
         confidence_score=confidence_score,
-        overall_confidence="high",
-        requires_review=False,
-        requires_clarification=False,
-        status="auto_process",
+        overall_confidence=overall_confidence,
+        requires_review=routing_decision == "review",
+        requires_clarification=requires_clarification,
+        status=routing_decision if routing_decision != "manual" else "pending",
         routing_decision=routing_decision,
         processing_time_ms=processing_time_ms,
     )
@@ -861,23 +1120,150 @@ async def process_excel_order(
                 product_name=item.product_name,
                 quantity=item.quantity,
                 unit=item.unit,
-                confidence="high",
+                confidence=overall_confidence,
             )
             db.add(order_item)
 
-    # Add confirmation message
-    confirmation = process_result.confirmation_message if process_result.success else None
-    if confirmation:
-        assistant_message = Message(
-            conversation_id=conversation.id,
-            role="assistant",
-            content=confirmation,
-            message_type="text",
-        )
-        db.add(assistant_message)
+    # Initialize cumulative state from Excel items
+    state_manager = OrderStateManager(db)
+    cumulative_state = await state_manager.get_or_create_state(conversation.id)
 
-    conversation.status = "completed"
+    # Populate cumulative items from Excel
+    added_items = []
+    for sheet in result.sheets:
+        for item in sheet.items:
+            notes = f"Category: {item.category}"
+            if item.subcategory:
+                notes += f", Subcategory: {item.subcategory}"
+            if item.price:
+                notes += f", Price: KES {item.price:,.0f}"
+
+            cum_item = CumulativeOrderItem(
+                cumulative_state_id=cumulative_state.id,
+                product_name=item.product_name,
+                normalized_name=state_manager.normalize_product_name(item.product_name),
+                quantity=item.quantity,
+                unit=item.unit,
+                confidence="high",  # Excel data is structured
+                notes=notes,
+                first_mentioned_message_id=excel_message.id,
+                last_modified_message_id=excel_message.id,
+                modification_count=0,
+                is_active=True,
+            )
+            db.add(cum_item)
+            added_items.append(cum_item)
+
+    # Update cumulative state metadata and items_json
+    cumulative_state.customer_name = customer_name or result.customer_name
+    cumulative_state.overall_confidence = overall_confidence
+    cumulative_state.version = 1
+    cumulative_state.items_json = {
+        "items": [
+            {
+                "product_name": item.product_name,
+                "normalized_name": item.normalized_name,
+                "quantity": item.quantity,
+                "unit": item.unit,
+                "confidence": "high",
+                "notes": item.notes,
+                "modification_count": 0,
+                "is_active": True,
+                "first_mentioned_message_id": excel_message.id,
+                "last_modified_message_id": excel_message.id,
+            }
+            for item in added_items
+        ]
+    }
+    await db.flush()
+
+    # Create initial snapshot
+    changes = {
+        "added": [
+            {
+                "product_name": item.product_name,
+                "quantity": item.quantity,
+                "unit": item.unit,
+                "confidence": "high",
+            }
+            for item in added_items
+        ],
+        "modified": [],
+        "unchanged": [],
+    }
+    snapshot = OrderSnapshot(
+        cumulative_state_id=cumulative_state.id,
+        message_id=excel_message.id,
+        items_json={"items": [
+            {
+                "product_name": item.product_name,
+                "quantity": item.quantity,
+                "unit": item.unit,
+                "confidence": "high",
+                "notes": item.notes,
+            }
+            for item in added_items
+        ]},
+        changes_json=changes,
+        version=1,
+        extraction_confidence=overall_confidence,
+        requires_clarification=requires_clarification,
+    )
+    db.add(snapshot)
+
+    # Generate detailed summary message
+    summary_lines = [f"*Order Summary - {file.filename}*\n"]
+    for sheet in result.sheets:
+        summary_lines.append(f"\n*{sheet.category}* ({sheet.total_items} items)")
+        for item in sheet.items:
+            line = f"  • {item.product_name}: {item.quantity} {item.unit}"
+            if item.price:
+                line += f" @ KES {item.price:,.0f}"
+            summary_lines.append(line)
+        if sheet.total_value:
+            summary_lines.append(f"  _Subtotal: KES {sheet.total_value:,.0f}_")
+
+    summary_lines.append(f"\n*Total Items:* {result.total_items}")
+    if result.total_value:
+        summary_lines.append(f"*Total Value:* KES {result.total_value:,.0f}")
+    summary_lines.append(f"\n*Confidence:* {overall_confidence.upper()} ({confidence_score*100:.0f}%)")
+    summary_lines.append(f"*Routing:* {routing_decision.replace('_', ' ').title()}")
+
+    summary_message = "\n".join(summary_lines)
+
+    # Add summary message
+    summary_msg = Message(
+        conversation_id=conversation.id,
+        role="system",
+        content=summary_message,
+        message_type="text",
+    )
+    db.add(summary_msg)
+
+    # Add confirmation message from LLM or use fallback for large orders
+    confirmation = process_result.confirmation_message if process_result.success else None
+    if not confirmation:
+        # Fallback confirmation for large Excel orders or LLM failures
+        confirmation = (
+            f"I've received your order from {file.filename}. "
+            f"It contains {result.total_items} items across {result.total_categories} categories"
+            + (f" with a total value of KES {result.total_value:,.0f}" if result.total_value else "")
+            + ". You can review the full order details in the Extraction Results panel. "
+            "Feel free to send me a message if you'd like to make any changes to the order!"
+        )
+    assistant_message = Message(
+        conversation_id=conversation.id,
+        role="assistant",
+        content=confirmation,
+        message_type="text",
+    )
+    db.add(assistant_message)
+
+    conversation.status = "completed" if not requires_clarification else "needs_clarification"
     await db.commit()
+
+    # Build cumulative state response
+    cum_state_response = build_cumulative_state_response(cumulative_state)
 
     return ExcelOrderResponse(
         success=True,
@@ -911,4 +1297,7 @@ async def process_excel_order(
         order_id=order.id,
         confirmation_message=confirmation,
         routing_decision=routing_decision,
+        confidence_score=confidence_score,
+        overall_confidence=overall_confidence,
+        cumulative_state=cum_state_response,
     )

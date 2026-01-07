@@ -2,6 +2,7 @@ import type {
   ProcessMessageResponse,
   Conversation,
   ConversationListItem,
+  ConversationState,
   Order,
   MetricsSummary,
   ConfidenceDistribution,
@@ -57,6 +58,10 @@ export const api = {
 
   async getConversation(id: number): Promise<Conversation> {
     return fetchJSON(`${API_BASE}/conversations/${id}`);
+  },
+
+  async getConversationState(id: number): Promise<ConversationState> {
+    return fetchJSON(`${API_BASE}/conversations/${id}/state`);
   },
 
   // Orders

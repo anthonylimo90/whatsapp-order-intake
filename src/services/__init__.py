@@ -12,6 +12,7 @@ from .excel_parser import (
     ExcelOrderSheet,
     ExcelOrderItem,
 )
+from .order_state import OrderStateManager
 
 __all__ = [
     "get_customer_order_history",
@@ -22,4 +23,5 @@ __all__ = [
     "ExcelOrderResult",
     "ExcelOrderSheet",
     "ExcelOrderItem",
+    "OrderStateManager",
 ]

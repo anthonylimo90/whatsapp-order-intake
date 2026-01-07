@@ -111,6 +111,9 @@ class ProcessMessageResponse(BaseModel):
     order: Optional[OrderResponse] = None
     routing_decision: Optional[str] = None
     error: Optional[str] = None
+    # Cumulative state fields
+    cumulative_state: Optional["CumulativeStateResponse"] = None
+    changes: Optional["ChangesResponse"] = None
 
 
 class MetricsSummary(BaseModel):
@@ -206,3 +209,84 @@ class ExcelOrderResponse(BaseModel):
     order_id: Optional[int] = None
     confirmation_message: Optional[str] = None
     routing_decision: Optional[str] = None
+    # Confidence scoring
+    confidence_score: Optional[float] = None
+    overall_confidence: Optional[str] = None
+    # Cumulative state for ExtractionPanel display and follow-up modifications
+    cumulative_state: Optional["CumulativeStateResponse"] = None
+
+
+# Cumulative order state schemas
+class CumulativeItemResponse(BaseModel):
+    """An item in the cumulative order state."""
+    product_name: str
+    normalized_name: Optional[str] = None
+    quantity: float
+    unit: str
+    confidence: str
+    original_text: Optional[str] = None
+    notes: Optional[str] = None
+    modification_count: int = 0
+    is_active: bool = True
+    first_mentioned_message_id: Optional[int] = None
+    last_modified_message_id: Optional[int] = None
+
+
+class ItemChangeResponse(BaseModel):
+    """A change to an item (for modified items)."""
+    product_name: str
+    old_quantity: Optional[float] = None
+    new_quantity: float
+    old_unit: Optional[str] = None
+    unit: str
+
+
+class ChangesResponse(BaseModel):
+    """Changes made in an extraction."""
+    added: list[CumulativeItemResponse] = []
+    modified: list[ItemChangeResponse] = []
+    unchanged: list[dict] = []
+
+
+class SnapshotResponse(BaseModel):
+    """A snapshot of order state at a point in time."""
+    id: int
+    version: int
+    items: list[CumulativeItemResponse]
+    changes: Optional[ChangesResponse] = None
+    message_id: int
+    extraction_confidence: Optional[str] = None
+    requires_clarification: bool = False
+    created_at: datetime
+
+
+class CumulativeStateResponse(BaseModel):
+    """Current cumulative order state."""
+    id: int
+    conversation_id: int
+    items: list[CumulativeItemResponse]
+    customer_name: Optional[str] = None
+    customer_organization: Optional[str] = None
+    delivery_date: Optional[str] = None
+    urgency: Optional[str] = None
+    overall_confidence: str
+    requires_clarification: bool
+    pending_clarifications: list[str] = []
+    version: int
+    last_updated_at: Optional[datetime] = None
+
+
+class ConversationStateResponse(BaseModel):
+    """Full conversation state for frontend hydration."""
+    conversation_id: int
+    customer_name: Optional[str] = None
+    status: str
+    messages: list[MessageResponse]
+    cumulative_state: Optional[CumulativeStateResponse] = None
+    snapshots: list[SnapshotResponse] = []
+    created_at: datetime
+    updated_at: datetime
+
+
+# Rebuild models to resolve forward references
+ProcessMessageResponse.model_rebuild()

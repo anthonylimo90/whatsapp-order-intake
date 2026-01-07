@@ -50,6 +50,7 @@ class Conversation(Base):
     customer = relationship("Customer", back_populates="conversations")
     messages = relationship("Message", back_populates="conversation", order_by="Message.created_at")
     orders = relationship("Order", back_populates="conversation")
+    cumulative_state = relationship("CumulativeOrderState", back_populates="conversation", uselist=False)
 
 
 class Message(Base):
@@ -118,3 +119,88 @@ class OrderItem(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
     order = relationship("Order", back_populates="items")
+
+
+class CumulativeOrderState(Base):
+    """Running total of order items for a conversation - the 'current truth'."""
+    __tablename__ = "cumulative_order_states"
+
+    id = Column(Integer, primary_key=True, index=True)
+    conversation_id = Column(Integer, ForeignKey("conversations.id"), unique=True, nullable=False)
+
+    # Current cumulative items (the merged result)
+    items_json = Column(JSON, nullable=False, default=lambda: {"items": []})
+
+    # Customer metadata
+    customer_name = Column(String(255), nullable=True)
+    customer_organization = Column(String(255), nullable=True)
+    delivery_date = Column(String(100), nullable=True)
+    urgency = Column(String(100), nullable=True)
+
+    # Confidence for the cumulative state
+    overall_confidence = Column(String(50), default="medium")
+    requires_clarification = Column(Boolean, default=False)
+    pending_clarifications = Column(JSON, default=lambda: [])
+
+    # Versioning
+    version = Column(Integer, default=1)
+    last_updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    conversation = relationship("Conversation", back_populates="cumulative_state")
+    snapshots = relationship("OrderSnapshot", back_populates="cumulative_state", order_by="OrderSnapshot.version")
+    cumulative_items = relationship("CumulativeOrderItem", back_populates="cumulative_state")
+
+
+class OrderSnapshot(Base):
+    """Snapshot of order state at a point in time - preserves extraction history."""
+    __tablename__ = "order_snapshots"
+
+    id = Column(Integer, primary_key=True, index=True)
+    cumulative_state_id = Column(Integer, ForeignKey("cumulative_order_states.id"), nullable=False)
+    message_id = Column(Integer, ForeignKey("messages.id"), nullable=False)
+
+    # Snapshot of items at this point
+    items_json = Column(JSON, nullable=False)
+
+    # What changed in this extraction
+    changes_json = Column(JSON, nullable=True)  # {"added": [], "modified": [], "unchanged": []}
+
+    # Extraction metadata
+    version = Column(Integer, nullable=False)
+    extraction_confidence = Column(String(50), nullable=True)
+    requires_clarification = Column(Boolean, default=False)
+    clarification_items = Column(JSON, nullable=True)
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    cumulative_state = relationship("CumulativeOrderState", back_populates="snapshots")
+    message = relationship("Message")
+
+
+class CumulativeOrderItem(Base):
+    """Individual item in cumulative order with modification tracking."""
+    __tablename__ = "cumulative_order_items"
+
+    id = Column(Integer, primary_key=True, index=True)
+    cumulative_state_id = Column(Integer, ForeignKey("cumulative_order_states.id"), nullable=False)
+
+    # Item details
+    product_name = Column(String(255), nullable=False)
+    normalized_name = Column(String(255), nullable=False, index=True)  # For matching
+    quantity = Column(Float, nullable=False)
+    unit = Column(String(50), nullable=True)
+    confidence = Column(String(50), default="medium")
+
+    # Tracking
+    first_mentioned_message_id = Column(Integer, ForeignKey("messages.id"), nullable=True)
+    last_modified_message_id = Column(Integer, ForeignKey("messages.id"), nullable=True)
+    modification_count = Column(Integer, default=0)
+
+    # Status
+    is_active = Column(Boolean, default=True)  # False if removed by user
+    notes = Column(Text, nullable=True)
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    cumulative_state = relationship("CumulativeOrderState", back_populates="cumulative_items")

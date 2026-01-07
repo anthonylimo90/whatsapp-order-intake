@@ -8,6 +8,9 @@ import type {
   MetricsSummary,
   ConfidenceDistribution,
   ExcelOrderResponse,
+  CumulativeState,
+  Changes,
+  OrderSnapshot,
 } from '../types';
 import { api } from '../api/client';
 
@@ -22,6 +25,12 @@ interface ChatState {
   currentExtraction: ExtractionResult | null;
   currentOrder: Order | null;
   routingDecision: string | null;
+
+  // Cumulative state
+  cumulativeState: CumulativeState | null;
+  snapshots: OrderSnapshot[];
+  latestChanges: Changes | null;
+  isHydrating: boolean;
 
   // Excel order state
   currentExcelOrder: ExcelOrderResponse | null;
@@ -40,6 +49,7 @@ interface ChatState {
   loadSampleMessages: () => Promise<void>;
   useSampleMessage: (sample: SampleMessage) => void;
   loadMetrics: () => Promise<void>;
+  hydrateFromServer: (conversationId: number) => Promise<void>;
   resetChat: () => void;
   clearError: () => void;
 }
@@ -52,6 +62,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
   currentExtraction: null,
   currentOrder: null,
   routingDecision: null,
+  cumulativeState: null,
+  snapshots: [],
+  latestChanges: null,
+  isHydrating: false,
   currentExcelOrder: null,
   sampleMessages: [],
   metrics: null,
@@ -73,9 +87,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
       messages: [...state.messages, userMessage],
       isProcessing: true,
       error: null,
-      currentExtraction: null,
-      currentOrder: null,
-      routingDecision: null,
+      // Don't clear cumulative state - preserve across messages
+      latestChanges: null,
     }));
 
     try {
@@ -118,6 +131,24 @@ export const useChatStore = create<ChatState>((set, get) => ({
         currentExtraction: response.extraction,
         currentOrder: response.order,
         routingDecision: response.routing_decision,
+        // Update cumulative state from response
+        cumulativeState: response.cumulative_state || state.cumulativeState,
+        latestChanges: response.changes || null,
+        snapshots: response.cumulative_state
+          ? [
+              ...state.snapshots,
+              {
+                id: Date.now(),
+                version: response.cumulative_state.version,
+                items: response.cumulative_state.items,
+                changes: response.changes || null,
+                message_id: response.message_id,
+                extraction_confidence: response.extraction?.overall_confidence || null,
+                requires_clarification: response.extraction?.requires_clarification || false,
+                created_at: new Date().toISOString(),
+              },
+            ]
+          : state.snapshots,
         isProcessing: false,
         error: response.error,
       }));
@@ -150,6 +181,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
       currentOrder: null,
       routingDecision: null,
       currentExcelOrder: null,
+      cumulativeState: null,
+      snapshots: [],
+      latestChanges: null,
       error: null,
       isProcessing: true,
     });
@@ -171,14 +205,15 @@ export const useChatStore = create<ChatState>((set, get) => ({
       const response = await api.uploadExcelOrder(file);
 
       if (response.success) {
-        // Build summary message
+        // Build concise summary message - items are shown in ExtractionPanel
         const categories = response.sheets.map(s => s.category).join(', ');
-        const summaryContent = `📊 *Excel Order Processed*\n\n` +
-          `📁 File: ${response.filename}\n` +
-          `📦 Categories: ${categories}\n` +
-          `🛒 Total Items: ${response.total_items}\n` +
-          (response.total_value ? `💰 Total Value: KES ${response.total_value.toLocaleString()}\n` : '') +
-          `\n✅ Routing: ${response.routing_decision?.replace('_', ' ')}`;
+        let summaryContent = `✅ Excel order processed successfully!\n\n`;
+        summaryContent += `📦 ${response.total_items} items across ${response.total_categories} categories`;
+        if (response.total_value) {
+          summaryContent += `\n💰 Total: KES ${response.total_value.toLocaleString()}`;
+        }
+        summaryContent += `\n\n📋 Categories: ${categories}`;
+        summaryContent += `\n\n👉 View full order details in the Extraction Results panel`;
 
         const summaryMessage: Message = {
           id: Date.now() + 1,
@@ -205,6 +240,27 @@ export const useChatStore = create<ChatState>((set, get) => ({
           conversationId: response.conversation_id,
           currentExcelOrder: response,
           routingDecision: response.routing_decision,
+          // Populate cumulative state from Excel response for ExtractionPanel display
+          cumulativeState: response.cumulative_state,
+          snapshots: response.cumulative_state ? [{
+            id: Date.now(),
+            version: 1,
+            items: response.cumulative_state.items,
+            changes: {
+              added: response.cumulative_state.items,
+              modified: [],
+              unchanged: [],
+            },
+            message_id: response.conversation_id || 0,
+            extraction_confidence: response.overall_confidence,
+            requires_clarification: false,
+            created_at: new Date().toISOString(),
+          }] : [],
+          latestChanges: response.cumulative_state ? {
+            added: response.cumulative_state.items,
+            modified: [],
+            unchanged: [],
+          } : null,
           isProcessing: false,
         }));
       } else {
@@ -252,6 +308,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
       currentExtraction: null,
       currentOrder: null,
       routingDecision: null,
+      cumulativeState: null,
+      snapshots: [],
+      latestChanges: null,
       error: null,
     });
   },
@@ -268,6 +327,27 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }
   },
 
+  hydrateFromServer: async (conversationId: number) => {
+    set({ isHydrating: true, error: null });
+
+    try {
+      const state = await api.getConversationState(conversationId);
+
+      set({
+        conversationId: state.conversation_id,
+        messages: state.messages,
+        cumulativeState: state.cumulative_state,
+        snapshots: state.snapshots,
+        isHydrating: false,
+      });
+    } catch (err) {
+      set({
+        isHydrating: false,
+        error: err instanceof Error ? err.message : 'Failed to load conversation',
+      });
+    }
+  },
+
   resetChat: () => {
     set({
       messages: [],
@@ -275,6 +355,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
       currentExtraction: null,
       currentOrder: null,
       routingDecision: null,
+      cumulativeState: null,
+      snapshots: [],
+      latestChanges: null,
       currentExcelOrder: null,
       error: null,
       isProcessing: false,
