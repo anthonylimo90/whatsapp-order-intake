@@ -1,4 +1,4 @@
-import { Mic } from 'lucide-react';
+import { Mic, FileSpreadsheet } from 'lucide-react';
 import type { Message } from '../../types';
 
 interface MessageBubbleProps {
@@ -9,6 +9,7 @@ export function MessageBubble({ message }: MessageBubbleProps) {
   const isCustomer = message.role === 'customer';
   const isSystem = message.role === 'system';
   const isVoiceNote = message.message_type === 'voice_transcription';
+  const isExcelOrder = message.message_type === 'excel_order';
 
   const formatTime = (dateString: string) => {
     const date = new Date(dateString);
@@ -57,7 +58,22 @@ export function MessageBubble({ message }: MessageBubbleProps) {
         {isVoiceNote && (
           <p className="text-xs text-gray-500 italic mb-1">Transcription:</p>
         )}
-        <p className="text-sm text-gray-800 whitespace-pre-wrap">{message.content}</p>
+        {isExcelOrder && (
+          <div className="flex items-center gap-3 p-2 bg-green-50 rounded-lg">
+            <div className="w-10 h-10 bg-green-600 rounded-lg flex items-center justify-center">
+              <FileSpreadsheet className="w-5 h-5 text-white" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-medium text-gray-800 truncate">
+                {message.content.replace('📎 ', '')}
+              </p>
+              <p className="text-xs text-gray-500">Excel Order File</p>
+            </div>
+          </div>
+        )}
+        {!isExcelOrder && (
+          <p className="text-sm text-gray-800 whitespace-pre-wrap">{message.content}</p>
+        )}
         <div className={`flex items-center gap-1 mt-1 ${isCustomer ? 'justify-end' : 'justify-start'}`}>
           <span className="text-[10px] text-gray-500">
             {formatTime(message.created_at)}

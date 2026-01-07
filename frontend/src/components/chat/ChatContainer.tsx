@@ -3,13 +3,14 @@ import { MessageBubble } from './MessageBubble';
 import { MessageInput } from './MessageInput';
 import { TypingIndicator } from './TypingIndicator';
 import { useChatStore } from '../../store/chatStore';
-import { RefreshCw } from 'lucide-react';
+import { RefreshCw, Paperclip, Mic } from 'lucide-react';
 
 export function ChatContainer() {
   const {
     messages,
     isProcessing,
     sendMessage,
+    uploadExcelFile,
     resetChat,
     currentExtraction,
   } = useChatStore();
@@ -56,12 +57,21 @@ export function ChatContainer() {
               </h3>
               <p className="text-sm text-gray-600 mb-4">
                 Send us your order via WhatsApp and we'll process it automatically.
-                Try sending an order like:
               </p>
-              <p className="text-sm text-gray-500 italic bg-gray-50 p-3 rounded">
-                "Hi, this is Sarah from Saruni Mara. We need 50kg rice, 20kg sugar,
-                and 10L cooking oil. Deliver Friday please!"
-              </p>
+              <div className="space-y-3 text-left">
+                <div className="flex items-start gap-2 text-sm text-gray-500 bg-gray-50 p-3 rounded">
+                  <span className="text-lg">💬</span>
+                  <span className="italic">"Hi, this is Sarah from Saruni Mara. We need 50kg rice, 20kg sugar..."</span>
+                </div>
+                <div className="flex items-center gap-2 text-sm text-gray-500 bg-gray-50 p-3 rounded">
+                  <Mic className="w-4 h-4" />
+                  <span>Send a voice note with your order</span>
+                </div>
+                <div className="flex items-center gap-2 text-sm text-gray-500 bg-gray-50 p-3 rounded">
+                  <Paperclip className="w-4 h-4" />
+                  <span>Attach an Excel order file (.xlsx)</span>
+                </div>
+              </div>
             </div>
           </div>
         )}
@@ -86,6 +96,7 @@ export function ChatContainer() {
       {/* Input */}
       <MessageInput
         onSend={(content, messageType) => sendMessage(content, messageType)}
+        onFileUpload={uploadExcelFile}
         disabled={isProcessing}
         placeholder={
           needsClarification

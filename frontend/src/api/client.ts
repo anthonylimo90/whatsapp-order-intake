@@ -8,6 +8,7 @@ import type {
   SampleMessage,
   Customer,
   Product,
+  ExcelOrderResponse,
 } from '../types';
 
 const API_BASE = '/api';
@@ -86,5 +87,26 @@ export const api = {
 
   async getProducts(): Promise<Product[]> {
     return fetchJSON(`${API_BASE}/products`);
+  },
+
+  // Excel Orders
+  async uploadExcelOrder(file: File, customerName?: string): Promise<ExcelOrderResponse> {
+    const formData = new FormData();
+    formData.append('file', file);
+    if (customerName) {
+      formData.append('customer_name', customerName);
+    }
+
+    const response = await fetch(`${API_BASE}/excel-order`, {
+      method: 'POST',
+      body: formData,
+    });
+
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ detail: 'Upload failed' }));
+      throw new Error(error.detail || `HTTP ${response.status}`);
+    }
+
+    return response.json();
   },
 };

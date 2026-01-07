@@ -119,3 +119,37 @@ export interface Product {
   price: number;
   in_stock: boolean;
 }
+
+// Excel Order Types
+export interface ExcelOrderItem {
+  category: string;
+  subcategory: string | null;
+  product_name: string;
+  unit: string;
+  price: number | null;
+  quantity: number;
+  row_number: number;
+}
+
+export interface ExcelOrderSheet {
+  category: string;
+  items: ExcelOrderItem[];
+  total_items: number;
+  total_value: number | null;
+}
+
+export interface ExcelOrderResponse {
+  success: boolean;
+  filename: string | null;
+  customer_name: string | null;
+  sheets: ExcelOrderSheet[];
+  total_items: number;
+  total_categories: number;
+  total_value: number | null;
+  warnings: string[];
+  error: string | null;
+  conversation_id: number | null;
+  order_id: number | null;
+  confirmation_message: string | null;
+  routing_decision: string | null;
+}

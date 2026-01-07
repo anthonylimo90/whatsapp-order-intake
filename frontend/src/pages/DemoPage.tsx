@@ -2,15 +2,13 @@ import { useState } from 'react';
 import { ChatContainer } from '../components/chat';
 import { ExtractionPanel } from '../components/extraction';
 import { SampleMessages } from '../components/common';
-import { ExcelUpload } from '../components/excel';
 import { useChatStore } from '../store/chatStore';
-import { MessageSquare, FileText, LayoutGrid, FileSpreadsheet } from 'lucide-react';
+import { MessageSquare, FileText, LayoutGrid } from 'lucide-react';
 
 type RightPanelTab = 'extraction' | 'samples';
 
 export function DemoPage() {
   const [rightPanelTab, setRightPanelTab] = useState<RightPanelTab>('extraction');
-  const [showExcelUpload, setShowExcelUpload] = useState(false);
   const { sendMessage } = useChatStore();
 
   const handleSampleSelect = (message: string) => {
@@ -32,13 +30,6 @@ export function DemoPage() {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <button
-            onClick={() => setShowExcelUpload(true)}
-            className="px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg flex items-center gap-2"
-          >
-            <FileSpreadsheet className="w-4 h-4" />
-            Excel Order
-          </button>
           <a
             href="/dashboard"
             className="px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg flex items-center gap-2"
@@ -48,18 +39,6 @@ export function DemoPage() {
           </a>
         </div>
       </header>
-
-      {/* Excel Upload Modal */}
-      {showExcelUpload && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <ExcelUpload
-            onSuccess={() => {
-              // Keep modal open to show results
-            }}
-            onClose={() => setShowExcelUpload(false)}
-          />
-        </div>
-      )}
 
       {/* Main Content */}
       <div className="flex-1 flex overflow-hidden">

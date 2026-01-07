@@ -7,6 +7,7 @@ import type {
   SampleMessage,
   MetricsSummary,
   ConfidenceDistribution,
+  ExcelOrderResponse,
 } from '../types';
 import { api } from '../api/client';
 
@@ -22,6 +23,9 @@ interface ChatState {
   currentOrder: Order | null;
   routingDecision: string | null;
 
+  // Excel order state
+  currentExcelOrder: ExcelOrderResponse | null;
+
   // Sample messages
   sampleMessages: SampleMessage[];
 
@@ -32,6 +36,7 @@ interface ChatState {
   // Actions
   sendMessage: (content: string, messageType?: string) => Promise<void>;
   sendClarification: (content: string) => Promise<void>;
+  uploadExcelFile: (file: File) => Promise<void>;
   loadSampleMessages: () => Promise<void>;
   useSampleMessage: (sample: SampleMessage) => void;
   loadMetrics: () => Promise<void>;
@@ -47,6 +52,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   currentExtraction: null,
   currentOrder: null,
   routingDecision: null,
+  currentExcelOrder: null,
   sampleMessages: [],
   metrics: null,
   confidenceDistribution: null,
@@ -135,6 +141,100 @@ export const useChatStore = create<ChatState>((set, get) => ({
     await get().sendMessage(content);
   },
 
+  uploadExcelFile: async (file: File) => {
+    // Reset chat for new Excel upload
+    set({
+      messages: [],
+      conversationId: null,
+      currentExtraction: null,
+      currentOrder: null,
+      routingDecision: null,
+      currentExcelOrder: null,
+      error: null,
+      isProcessing: true,
+    });
+
+    // Add file message immediately
+    const fileMessage: Message = {
+      id: Date.now(),
+      role: 'customer',
+      content: `📎 ${file.name}`,
+      message_type: 'excel_order',
+      created_at: new Date().toISOString(),
+    };
+
+    set((state) => ({
+      messages: [...state.messages, fileMessage],
+    }));
+
+    try {
+      const response = await api.uploadExcelOrder(file);
+
+      if (response.success) {
+        // Build summary message
+        const categories = response.sheets.map(s => s.category).join(', ');
+        const summaryContent = `📊 *Excel Order Processed*\n\n` +
+          `📁 File: ${response.filename}\n` +
+          `📦 Categories: ${categories}\n` +
+          `🛒 Total Items: ${response.total_items}\n` +
+          (response.total_value ? `💰 Total Value: KES ${response.total_value.toLocaleString()}\n` : '') +
+          `\n✅ Routing: ${response.routing_decision?.replace('_', ' ')}`;
+
+        const summaryMessage: Message = {
+          id: Date.now() + 1,
+          role: 'system',
+          content: summaryContent,
+          message_type: 'text',
+          created_at: new Date().toISOString(),
+        };
+
+        const assistantMessages: Message[] = [summaryMessage];
+
+        if (response.confirmation_message) {
+          assistantMessages.push({
+            id: Date.now() + 2,
+            role: 'assistant',
+            content: response.confirmation_message,
+            message_type: 'text',
+            created_at: new Date().toISOString(),
+          });
+        }
+
+        set((state) => ({
+          messages: [...state.messages, ...assistantMessages],
+          conversationId: response.conversation_id,
+          currentExcelOrder: response,
+          routingDecision: response.routing_decision,
+          isProcessing: false,
+        }));
+      } else {
+        set((state) => ({
+          messages: [...state.messages, {
+            id: Date.now() + 1,
+            role: 'system',
+            content: `❌ Error: ${response.error}`,
+            message_type: 'text',
+            created_at: new Date().toISOString(),
+          }],
+          isProcessing: false,
+          error: response.error,
+        }));
+      }
+    } catch (err) {
+      set((state) => ({
+        messages: [...state.messages, {
+          id: Date.now() + 1,
+          role: 'system',
+          content: `❌ Error: ${err instanceof Error ? err.message : 'Upload failed'}`,
+          message_type: 'text',
+          created_at: new Date().toISOString(),
+        }],
+        isProcessing: false,
+        error: err instanceof Error ? err.message : 'Upload failed',
+      }));
+    }
+  },
+
   loadSampleMessages: async () => {
     try {
       const samples = await api.getSampleMessages();
@@ -175,6 +275,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       currentExtraction: null,
       currentOrder: null,
       routingDecision: null,
+      currentExcelOrder: null,
       error: null,
       isProcessing: false,
     });
