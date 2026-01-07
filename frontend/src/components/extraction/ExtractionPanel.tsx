@@ -173,6 +173,15 @@ function CumulativeView({
   const addedNames = new Set(latestChanges?.added.map(a => a.product_name) || []);
   const modifiedNames = new Set(latestChanges?.modified.map(m => m.product_name) || []);
 
+  // Check if an item needs clarification based on pending_clarifications
+  const itemNeedsClarification = (productName: string): string | null => {
+    if (!cumulativeState.pending_clarifications?.length) return null;
+    const match = cumulativeState.pending_clarifications.find(
+      c => c.toLowerCase().includes(productName.toLowerCase())
+    );
+    return match || null;
+  };
+
   return (
     <div className="p-4 space-y-4">
       {/* Summary Header */}
@@ -241,12 +250,16 @@ function CumulativeView({
           {activeItems.map((item, index) => {
             const isAdded = addedNames.has(item.product_name);
             const isModified = modifiedNames.has(item.product_name);
+            const clarificationReason = itemNeedsClarification(item.product_name);
+            const needsClarification = !!clarificationReason;
 
             return (
               <div
                 key={index}
                 className={`p-3 rounded-lg border transition-colors ${
-                  isAdded
+                  needsClarification
+                    ? 'bg-amber-50 border-amber-300 clarification-item'
+                    : isAdded
                     ? 'bg-green-50 border-green-200'
                     : isModified
                     ? 'bg-blue-50 border-blue-200'
@@ -255,8 +268,9 @@ function CumulativeView({
               >
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
-                    {isAdded && <Plus className="w-4 h-4 text-green-600" />}
-                    {isModified && <Edit3 className="w-4 h-4 text-blue-600" />}
+                    {needsClarification && <AlertTriangle className="w-4 h-4 text-amber-500" />}
+                    {!needsClarification && isAdded && <Plus className="w-4 h-4 text-green-600" />}
+                    {!needsClarification && isModified && <Edit3 className="w-4 h-4 text-blue-600" />}
                     <span className="font-medium text-gray-800">{item.product_name}</span>
                   </div>
                   <ConfidenceBadge level={item.confidence} />
@@ -271,7 +285,12 @@ function CumulativeView({
                     </span>
                   )}
                 </div>
-                {item.notes && (
+                {needsClarification && (
+                  <p className="text-xs text-amber-700 mt-2 bg-amber-100 px-2 py-1 rounded">
+                    Needs clarification
+                  </p>
+                )}
+                {item.notes && !needsClarification && (
                   <p className="text-xs text-amber-600 mt-1">⚠️ {item.notes}</p>
                 )}
               </div>
