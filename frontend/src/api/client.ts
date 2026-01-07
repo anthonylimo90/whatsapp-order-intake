@@ -1,0 +1,90 @@
+import type {
+  ProcessMessageResponse,
+  Conversation,
+  ConversationListItem,
+  Order,
+  MetricsSummary,
+  ConfidenceDistribution,
+  SampleMessage,
+  Customer,
+  Product,
+} from '../types';
+
+const API_BASE = '/api';
+
+async function fetchJSON<T>(url: string, options?: RequestInit): Promise<T> {
+  const response = await fetch(url, {
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options?.headers,
+    },
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: 'Request failed' }));
+    throw new Error(error.detail || `HTTP ${response.status}`);
+  }
+
+  return response.json();
+}
+
+export const api = {
+  // Messages
+  async processMessage(content: string, customerName?: string): Promise<ProcessMessageResponse> {
+    return fetchJSON(`${API_BASE}/messages`, {
+      method: 'POST',
+      body: JSON.stringify({
+        content,
+        customer_name: customerName,
+        message_type: 'text',
+      }),
+    });
+  },
+
+  async submitClarification(conversationId: number, content: string): Promise<ProcessMessageResponse> {
+    return fetchJSON(`${API_BASE}/conversations/${conversationId}/clarify`, {
+      method: 'POST',
+      body: JSON.stringify({ content }),
+    });
+  },
+
+  // Conversations
+  async listConversations(limit = 50, offset = 0): Promise<ConversationListItem[]> {
+    return fetchJSON(`${API_BASE}/conversations?limit=${limit}&offset=${offset}`);
+  },
+
+  async getConversation(id: number): Promise<Conversation> {
+    return fetchJSON(`${API_BASE}/conversations/${id}`);
+  },
+
+  // Orders
+  async listOrders(status?: string, limit = 50, offset = 0): Promise<Order[]> {
+    let url = `${API_BASE}/orders?limit=${limit}&offset=${offset}`;
+    if (status) url += `&status=${status}`;
+    return fetchJSON(url);
+  },
+
+  // Metrics
+  async getMetricsSummary(): Promise<MetricsSummary> {
+    return fetchJSON(`${API_BASE}/metrics/summary`);
+  },
+
+  async getConfidenceDistribution(): Promise<ConfidenceDistribution> {
+    return fetchJSON(`${API_BASE}/metrics/confidence`);
+  },
+
+  // Sample Messages
+  async getSampleMessages(): Promise<SampleMessage[]> {
+    return fetchJSON(`${API_BASE}/samples`);
+  },
+
+  // Customers & Products
+  async getCustomers(): Promise<Customer[]> {
+    return fetchJSON(`${API_BASE}/customers`);
+  },
+
+  async getProducts(): Promise<Product[]> {
+    return fetchJSON(`${API_BASE}/products`);
+  },
+};

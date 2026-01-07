@@ -25,3 +25,4 @@ markers = [
     "integration: marks tests as integration tests (require API key)",
 ]
 testpaths = ["tests"]
+addopts = "-m 'not integration'"
