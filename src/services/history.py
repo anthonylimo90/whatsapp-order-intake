@@ -1,7 +1,8 @@
 """Order history service for resolving ambiguous references."""
 
-from typing import Optional
-from sqlalchemy import select, func
+from typing import Optional, List, Dict, Any
+from difflib import SequenceMatcher
+from sqlalchemy import select, func, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db.models import Order, OrderItem, Customer
@@ -166,3 +167,195 @@ def format_order_history_context(
     )
 
     return "\n".join(lines)
+
+
+async def find_customer_fuzzy(
+    session: AsyncSession,
+    customer_name: Optional[str] = None,
+    organization: Optional[str] = None,
+    phone: Optional[str] = None,
+    min_confidence: float = 0.6,
+) -> Optional[Customer]:
+    """
+    Find customer using fuzzy matching on name/organization.
+
+    Args:
+        session: Database session
+        customer_name: Customer contact name
+        organization: Organization/lodge name
+        phone: Phone number (exact match)
+        min_confidence: Minimum similarity threshold
+
+    Returns:
+        Best matching Customer or None
+    """
+    # Try exact phone match first (most reliable)
+    if phone:
+        query = select(Customer).where(
+            or_(Customer.phone == phone, Customer.phone == phone.replace(" ", ""))
+        )
+        result = await session.execute(query)
+        customer = result.scalar_one_or_none()
+        if customer:
+            return customer
+
+    # Get all customers for fuzzy matching
+    query = select(Customer)
+    result = await session.execute(query)
+    customers = result.scalars().all()
+
+    if not customers:
+        return None
+
+    best_match = None
+    best_score = 0.0
+
+    search_term = (organization or customer_name or "").lower()
+    if not search_term:
+        return None
+
+    for customer in customers:
+        # Match against organization
+        if customer.organization:
+            org_score = SequenceMatcher(
+                None, search_term, customer.organization.lower()
+            ).ratio()
+            if org_score > best_score:
+                best_score = org_score
+                best_match = customer
+
+        # Match against name
+        if customer.name:
+            name_score = SequenceMatcher(
+                None, search_term, customer.name.lower()
+            ).ratio()
+            if name_score > best_score:
+                best_score = name_score
+                best_match = customer
+
+    if best_score >= min_confidence:
+        return best_match
+
+    return None
+
+
+async def resolve_usual_order(
+    session: AsyncSession,
+    customer_name: Optional[str] = None,
+    organization: Optional[str] = None,
+    resolve_type: str = "frequent",
+) -> Optional[List[Dict[str, Any]]]:
+    """
+    Resolve 'the usual' to actual order items.
+
+    Args:
+        session: Database session
+        customer_name: Customer contact name
+        organization: Organization/lodge name
+        resolve_type: 'frequent' for top items, 'last' for most recent order
+
+    Returns:
+        List of items with product_name, quantity, unit, or None if no history
+    """
+    if resolve_type == "last":
+        # Get most recent order items
+        history = await get_customer_order_history(
+            session, customer_name, organization, limit=1
+        )
+        if not history:
+            return None
+
+        # Parse items from the most recent order
+        query = select(Order).order_by(Order.created_at.desc())
+
+        if organization:
+            query = query.where(
+                func.lower(Order.organization).contains(organization.lower())
+            )
+        elif customer_name:
+            query = query.where(
+                func.lower(Order.customer_name).contains(customer_name.lower())
+            )
+        else:
+            return None
+
+        query = query.limit(1)
+        result = await session.execute(query)
+        order = result.scalar_one_or_none()
+
+        if order and order.items_json and "items" in order.items_json:
+            return [
+                {
+                    "product_name": item["product_name"],
+                    "quantity": item["quantity"],
+                    "unit": item["unit"],
+                    "resolved_from": "last_order",
+                }
+                for item in order.items_json["items"]
+            ]
+
+        return None
+
+    else:  # frequent
+        # Get frequently ordered items with typical quantities
+        frequent = await get_customer_frequent_items(
+            session, customer_name, organization, limit=10
+        )
+
+        if not frequent:
+            return None
+
+        # Return items that have been ordered at least 2 times
+        return [
+            {
+                "product_name": item["product_name"],
+                "quantity": item["typical_quantity"],
+                "unit": item["unit"],
+                "resolved_from": "frequent_items",
+                "order_count": item["order_count"],
+            }
+            for item in frequent
+            if item["order_count"] >= 2
+        ]
+
+
+def detect_usual_reference(message: str) -> bool:
+    """
+    Detect if a message contains references to 'the usual' or similar.
+
+    Args:
+        message: The customer message
+
+    Returns:
+        True if message references usual/previous orders
+    """
+    message_lower = message.lower()
+
+    # Common phrases indicating 'the usual'
+    usual_phrases = [
+        "the usual",
+        "my usual",
+        "our usual",
+        "same as before",
+        "same as last time",
+        "same order",
+        "regular order",
+        "same as yesterday",
+        "same as always",
+        "what we always get",
+        "what i always order",
+        "repeat order",
+        "reorder",
+        "same thing",
+        "usual order",
+        # Swahili equivalents
+        "kama kawaida",
+        "order ya kawaida",
+        "vile tunavyoagiza",
+    ]
+
+    for phrase in usual_phrases:
+        if phrase in message_lower:
+            return True
+
+    return False

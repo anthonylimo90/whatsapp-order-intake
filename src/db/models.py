@@ -177,6 +177,31 @@ class OrderSnapshot(Base):
     message = relationship("Message")
 
 
+class ProductAlias(Base):
+    """Product name aliases for fuzzy matching."""
+    __tablename__ = "product_aliases"
+
+    id = Column(Integer, primary_key=True, index=True)
+    alias = Column(String(255), nullable=False, index=True)
+    canonical_name = Column(String(255), nullable=False)
+    language = Column(String(20), default="en")  # 'en', 'sw' for Swahili
+    category = Column(String(100), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class ProductMappingCache(Base):
+    """Cache of successful product name mappings."""
+    __tablename__ = "product_mapping_cache"
+
+    id = Column(Integer, primary_key=True, index=True)
+    input_text = Column(String(255), unique=True, nullable=False, index=True)
+    matched_product_name = Column(String(255), nullable=False)
+    confidence = Column(Float, default=0.0)
+    hit_count = Column(Integer, default=1)
+    last_used = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
 class CumulativeOrderItem(Base):
     """Individual item in cumulative order with modification tracking."""
     __tablename__ = "cumulative_order_items"

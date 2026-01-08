@@ -6,6 +6,7 @@ from sqlalchemy import select
 
 from ..db.models import CumulativeOrderState, OrderSnapshot, CumulativeOrderItem, Message
 from ..models import ExtractedOrder, ExtractedItem
+from .product_matching import ProductMatchingService
 
 
 class OrderStateManager:
@@ -13,6 +14,7 @@ class OrderStateManager:
 
     def __init__(self, session: AsyncSession):
         self.session = session
+        self.matcher = ProductMatchingService(session)
 
     async def get_or_create_state(self, conversation_id: int) -> CumulativeOrderState:
         """Get existing cumulative state or create new one."""
@@ -34,37 +36,8 @@ class OrderStateManager:
         return state
 
     def normalize_product_name(self, name: str) -> str:
-        """Normalize product name for matching."""
-        if not name:
-            return ""
-
-        # Lowercase and strip
-        normalized = name.lower().strip()
-
-        # Remove common units that might be in name
-        units_to_remove = [
-            'kg', 'g', 'l', 'ml', 'pieces', 'pcs', 'trays', 'tray',
-            'crates', 'crate', 'bags', 'bag', 'bottles', 'bottle',
-            'packets', 'packet', 'cartons', 'carton', 'boxes', 'box'
-        ]
-        for unit in units_to_remove:
-            normalized = normalized.replace(f' {unit}', '')
-            normalized = normalized.replace(f'{unit} ', '')
-
-        # Handle common variations/synonyms
-        variations = {
-            'basmati rice': 'rice basmati',
-            'cooking oil': 'oil cooking',
-            'vegetable oil': 'oil vegetable',
-            'sunflower oil': 'oil sunflower',
-            'white sugar': 'sugar white',
-            'brown sugar': 'sugar brown',
-            'fresh milk': 'milk fresh',
-            'uht milk': 'milk uht',
-            'long life milk': 'milk long life',
-        }
-
-        return variations.get(normalized, normalized)
+        """Normalize product name for matching using enhanced matcher."""
+        return self.matcher.normalize(name)
 
     def find_matching_item(
         self,
@@ -72,18 +45,29 @@ class OrderStateManager:
         existing_items: List[Dict[str, Any]],
     ) -> Tuple[Optional[Dict[str, Any]], float]:
         """
-        Find matching item using fuzzy matching.
+        Find matching item using enhanced fuzzy matching.
 
         Returns (matched_item, confidence_score).
-        Score thresholds:
-        - 1.0: Exact match
-        - 0.8: Substring match
-        - 0.5+: Jaccard word similarity
+        Uses ProductMatchingService for:
+        - Alias lookup
+        - Levenshtein distance
+        - Combined scoring (SequenceMatcher + Levenshtein + Jaccard)
         """
         new_normalized = self.normalize_product_name(new_item.product_name)
 
+        # First check if new item matches a known alias
+        alias_match = self.matcher.find_alias(new_item.product_name)
+        if alias_match:
+            new_normalized = alias_match
+
         best_match = None
         best_score = 0.0
+
+        # Get list of existing product names for fuzzy matching
+        existing_names = [
+            item.get("product_name", "") for item in existing_items
+            if item.get("is_active", True)
+        ]
 
         for item in existing_items:
             if not item.get("is_active", True):
@@ -93,30 +77,25 @@ class OrderStateManager:
                 item.get("product_name", "")
             )
 
-            # Exact match
+            # Check if existing item has an alias mapping
+            existing_alias = self.matcher.find_alias(item.get("product_name", ""))
+            if existing_alias:
+                existing_normalized = existing_alias
+
+            # Exact match (including after alias resolution)
             if new_normalized == existing_normalized:
                 return item, 1.0
 
-            # Substring match
-            if new_normalized in existing_normalized or existing_normalized in new_normalized:
-                score = 0.8
-                if score > best_score:
-                    best_match = item
-                    best_score = score
-                continue
+            # Use the enhanced fuzzy matcher
+            match_result = self.matcher.match_sync(
+                new_item.product_name,
+                candidates=[item.get("product_name", "")],
+                min_confidence=0.5
+            )
 
-            # Word overlap (Jaccard similarity)
-            new_words = set(new_normalized.split())
-            existing_words = set(existing_normalized.split())
-
-            if new_words and existing_words:
-                intersection = len(new_words & existing_words)
-                union = len(new_words | existing_words)
-                jaccard = intersection / union if union > 0 else 0
-
-                if jaccard > 0.5 and jaccard > best_score:
-                    best_match = item
-                    best_score = jaccard
+            if match_result and match_result.confidence > best_score:
+                best_match = item
+                best_score = match_result.confidence
 
         return best_match, best_score
 
